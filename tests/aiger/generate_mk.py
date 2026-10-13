@@ -55,7 +55,7 @@ def create_tests():
     ]))
 
 extra = [
-    "SHELL := /usr/bin/env bash",
+    "SHELL := bash",
 ]
 
 gen_tests_makefile.generate_custom(create_tests, extra)
