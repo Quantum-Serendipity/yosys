@@ -157,7 +157,7 @@ void msg_func(msg_type_t msg_type, const char *message_id, linefile_type linefil
 			logger().formatted_warning(src, message_prefix, "%s%s\n", message);
 		} else {
 			logger().formatted_string(LogSeverity::Info, src, message_prefix, "%s%s\n", message);
-		}			
+		}
 	}
 	if (msg_type == VERIFIC_ERROR || msg_type == VERIFIC_PROGRAM_ERROR)
 		verific_error_msg = "Design elaboration failed; see full log for details";
@@ -3230,7 +3230,7 @@ struct VerificPass : public Pass {
 		log("\n");
 		log("Load the specified Liberty files into Verific.\n");
 		log("Default library when -work is not present is one specified in liberty file.\n");
-		log("To use from SystemVerilog or VHDL use -L to specify liberty library.");
+		log("To use from SystemVerilog or VHDL use -L to specify liberty library.\n");
 		log("\n");
 		log("    -lib\n");
 		log("        only create empty blackbox modules\n");
