@@ -22,7 +22,7 @@
 #include "kernel/consteval.h"
 #include "kernel/log.h"
 #include <sstream>
-#include <stdlib.h>
+#include "kernel/ff.h"
 #include <stdio.h>
 
 USING_YOSYS_NAMESPACE
@@ -289,6 +289,54 @@ void proc_dff(RTLIL::Module *mod, RTLIL::Process *proc, ConstEval &ce)
 	}
 }
 
+void copy_async_reg_attributes(RTLIL::Cell *cell)
+{
+	for (auto &chunk : cell->getPort(ID::Q).chunks()) {
+		if (!chunk.wire || !chunk.wire->get_async_reg_attribute())
+			continue;
+		for (auto &it : chunk.wire->attributes)
+			if (RTLIL::AttrObject::is_async_reg_attribute(it.first) && !cell->attributes.count(it.first))
+				cell->attributes[it.first] = it.second;
+	}
+}
+
+void proc_dff_async_reg(RTLIL::Module *mod, const pool<RTLIL::Cell*> &new_cells)
+{
+	SigMap sigmap;
+	FfInitVals initvals;
+	bool initvals_set = false;
+
+	for (auto cell : new_cells) {
+		if (!cell->is_builtin_ff())
+			continue;
+		RTLIL::SigSpec sig_q = cell->getPort(ID::Q);
+		std::vector<int> async_bits, other_bits;
+		for (int i = 0; i < GetSize(sig_q); i++) {
+			if (sig_q[i].wire && sig_q[i].wire->get_async_reg_attribute())
+				async_bits.push_back(i);
+			else
+				other_bits.push_back(i);
+		}
+		if (async_bits.empty())
+			continue;
+		if (!other_bits.empty()) {
+			if (!initvals_set) {
+				sigmap.set(mod);
+				initvals.set(&sigmap, mod);
+				initvals_set = true;
+			}
+			FfData ff(&initvals, cell);
+			FfData ff_async = ff.slice(async_bits);
+			FfData ff_other = ff.slice(other_bits);
+			ff.remove();
+			cell = ff_async.emit();
+			ff_other.emit();
+		}
+		if (cell)
+			copy_async_reg_attributes(cell);
+	}
+}
+
 struct ProcDffPass : public Pass {
 	ProcDffPass() : Pass("proc_dff", "extract flip-flops from processes") { }
 	void help() override
@@ -309,8 +357,14 @@ struct ProcDffPass : public Pass {
 
 		for (auto mod : design->all_selected_modules()) {
 			ConstEval ce(mod);
+			pool<RTLIL::Cell*> old_cells(mod->cells().begin(), mod->cells().end());
 			for (auto proc : mod->selected_processes())
 				proc_dff(mod, proc, ce);
+			pool<RTLIL::Cell*> new_cells;
+			for (auto cell : mod->cells())
+				if (!old_cells.count(cell))
+					new_cells.insert(cell);
+			proc_dff_async_reg(mod, new_cells);
 		}
 	}
 } ProcDffPass;

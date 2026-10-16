@@ -391,6 +391,8 @@ bool AbcModuleState::prepare_cell(const AbcSigMap &assign_map, RTLIL::Cell *cell
 	if (cell->is_builtin_ff()) {
 		if (!dff_mode)
 			return false;
+		if (cell->has_async_reg_attr())
+			return false;
 		FfData ff(&initvals, cell);
 		gate_type_t type = G(FF);
 		if (!ff.has_clk)

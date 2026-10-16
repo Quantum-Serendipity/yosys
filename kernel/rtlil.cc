@@ -4520,6 +4520,47 @@ bool RTLIL::Cell::is_builtin_ff() const {
 	return StaticCellTypes::categories.is_ff(type);
 }
 
+bool RTLIL::AttrObject::is_async_reg_attribute(RTLIL::IdString id)
+{
+	if (!id.isPublic())
+		return false;
+	std::string_view name(id.c_str() + 1);
+	std::string_view want("async_reg");
+	return name.size() == want.size() && std::equal(name.begin(), name.end(), want.begin(),
+			[](char a, char b) { return std::tolower((unsigned char)a) == b; });
+}
+
+bool RTLIL::AttrObject::get_async_reg_attribute() const
+{
+	for (const auto &it : attributes) {
+		if (!is_async_reg_attribute(it.first))
+			continue;
+		if (!(it.second.flags & RTLIL::CONST_FLAG_STRING)) {
+			if (it.second.as_bool())
+				return true;
+			continue;
+		}
+		std::string value = it.second.decode_string();
+		std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return std::tolower(c); });
+		if (!value.empty() && value != "false" && value != "no" && value != "0")
+			return true;
+	}
+	return false;
+}
+
+bool RTLIL::Cell::has_async_reg_attr() const
+{
+	if (get_async_reg_attribute())
+		return true;
+	auto it = connections_.find(ID::Q);
+	if (it == connections_.end())
+		return false;
+	for (auto &chunk : it->second.chunks())
+		if (chunk.wire && chunk.wire->get_async_reg_attribute())
+			return true;
+	return false;
+}
+
 RTLIL::SigChunk::SigChunk(const RTLIL::SigBit &bit)
 {
 	wire = bit.wire;

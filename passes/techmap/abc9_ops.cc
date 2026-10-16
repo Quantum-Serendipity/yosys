@@ -726,7 +726,7 @@ void prep_xaiger(RTLIL::Module *module, bool dff)
 	for (auto cell : module->cells()) {
 		if (cell->type.in(ID($_DFF_N_), ID($_DFF_P_)))
 			continue;
-		if (cell->has_keep_attr())
+		if (cell->has_keep_attr() || cell->has_async_reg_attr())
 			continue;
 
 		auto inst_module = design->module(cell->type);
@@ -771,7 +771,7 @@ void prep_xaiger(RTLIL::Module *module, bool dff)
 		for (auto cell : module->cells()) {
 			if (cell->type.in(ID($_DFF_N_), ID($_DFF_P_)))
 				continue;
-			if (cell->has_keep_attr())
+			if (cell->has_keep_attr() || cell->has_async_reg_attr())
 				continue;
 
 			auto inst_module = design->module(cell->type);
