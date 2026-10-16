@@ -122,6 +122,7 @@ endcode
 
 match ff
 	select ff->type.in($dff, $dffe, $sdff, $sdffe)
+	select !ff->has_async_reg_attr()
 	// DSP48E1 does not support clock inversion
 	select param(ff, \CLK_POLARITY).as_bool()
 

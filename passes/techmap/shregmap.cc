@@ -120,7 +120,7 @@ struct ShregmapWorker
 
 		for (auto cell : module->cells())
 		{
-			if (opts.ffcells.count(cell->type) && !cell->get_bool_attribute(ID::keep))
+			if (opts.ffcells.count(cell->type) && !cell->get_bool_attribute(ID::keep) && !is_async_reg(cell))
 			{
 				IdString d_port = opts.ffcells.at(cell->type).first;
 				IdString q_port = opts.ffcells.at(cell->type).second;
@@ -354,6 +354,16 @@ struct ShregmapWorker
 		sigbit_chain_next.clear();
 		sigbit_chain_prev.clear();
 		chain_start_cells.clear();
+	}
+
+	bool is_async_reg(Cell *cell)
+	{
+		if (cell->get_async_reg_attribute())
+			return true;
+		for (auto &chunk : cell->getPort(opts.ffcells.at(cell->type).second).chunks())
+			if (chunk.wire && chunk.wire->get_async_reg_attribute())
+				return true;
+		return false;
 	}
 
 	ShregmapWorker(Module *module, const ShregmapOptions &opts) :

@@ -1,0 +1,193 @@
+read_verilog <<EOT
+module sync3(input clk, a, output q);
+(* ASYNC_REG = "TRUE" *) reg [2:0] s = 3'b000;
+always @(posedge clk) s <= {s[1:0], a};
+assign q = s[2];
+endmodule
+
+module sync3_lower(input clk, a, output q);
+(* async_reg = "true" *) reg [2:0] s = 3'b000;
+always @(posedge clk) s <= {s[1:0], a};
+assign q = s[2];
+endmodule
+
+module chain3(input clk, a, output q);
+reg [2:0] s = 3'b000;
+always @(posedge clk) s <= {s[1:0], a};
+assign q = s[2];
+endmodule
+
+module chain3_false(input clk, a, output q);
+(* ASYNC_REG = "FALSE" *) reg [2:0] s = 3'b000;
+always @(posedge clk) s <= {s[1:0], a};
+assign q = s[2];
+endmodule
+
+module sync_pair(input clk, a, output q0, q1);
+(* ASYNC_REG = "TRUE" *) reg [1:0] s0 = 2'b00;
+(* ASYNC_REG = "TRUE" *) reg [1:0] s1 = 2'b00;
+always @(posedge clk) begin
+	s0 <= {s0[0], a};
+	s1 <= {s1[0], a};
+end
+assign q0 = s0[1];
+assign q1 = s1[1];
+endmodule
+
+module plain_pair(input clk, a, output q0, q1);
+reg [1:0] s0 = 2'b00;
+reg [1:0] s1 = 2'b00;
+always @(posedge clk) begin
+	s0 <= {s0[0], a};
+	s1 <= {s1[0], a};
+end
+assign q0 = s0[1];
+assign q1 = s1[1];
+endmodule
+
+module mixed(input clk, a, b, output q, r);
+(* ASYNC_REG = "TRUE" *) reg [2:0] s = 3'b000;
+reg [2:0] t = 3'b000;
+always @(posedge clk) {s, t} <= {s[1:0], a, t[1:0], b};
+assign q = s[2];
+assign r = t[2];
+endmodule
+
+module sync_var(input clk, a, input [1:0] sel, output q);
+(* ASYNC_REG = "TRUE" *) reg [3:0] s = 4'b0000;
+always @(posedge clk) s <= {s[2:0], a};
+assign q = s[sel];
+endmodule
+
+module dsp_in(input clk, input [15:0] a, b, output reg [31:0] p);
+(* ASYNC_REG = "TRUE" *) reg [15:0] a_r;
+always @(posedge clk) begin
+	a_r <= a;
+	p <= a_r * b;
+end
+endmodule
+
+module ram_addr(input clk, we, input [3:0] wa, ra, input [7:0] wd, output [7:0] rd);
+reg [7:0] mem [0:15];
+(* ASYNC_REG = "TRUE" *) reg [3:0] ra_r;
+always @(posedge clk) begin
+	if (we) mem[wa] <= wd;
+	ra_r <= ra;
+end
+assign rd = mem[ra_r];
+endmodule
+EOT
+design -save read
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -top sync3
+select -assert-count 3 t:FDRE
+select -assert-count 3 t:FDRE a:ASYNC_REG %i
+select -assert-none t:SRL16E t:SRLC32E
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -abc9 -top sync3
+select -assert-count 3 t:FDRE
+select -assert-count 3 t:FDRE a:ASYNC_REG %i
+select -assert-none t:SRL16E t:SRLC32E
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -dff -top sync3
+select -assert-count 3 t:FDRE
+select -assert-count 3 t:FDRE a:ASYNC_REG %i
+select -assert-none t:SRL16E t:SRLC32E
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -abc9 -dff -top sync3
+select -assert-count 3 t:FDRE
+select -assert-count 3 t:FDRE a:ASYNC_REG %i
+select -assert-none t:SRL16E t:SRLC32E
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -top sync3_lower
+select -assert-count 3 t:FDRE
+select -assert-none t:SRL16E t:SRLC32E
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -top chain3
+select -assert-count 1 t:SRL16E
+select -assert-none t:FDRE
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -abc9 -top chain3
+select -assert-count 1 t:SRL16E
+select -assert-none t:FDRE
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -top chain3_false
+select -assert-count 1 t:SRL16E
+select -assert-none t:FDRE
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -top sync_pair
+select -assert-count 4 t:FDRE
+select -assert-count 4 t:FDRE a:ASYNC_REG %i
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -abc9 -top sync_pair
+select -assert-count 4 t:FDRE
+select -assert-count 4 t:FDRE a:ASYNC_REG %i
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -top plain_pair
+select -assert-count 2 t:FDRE
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -top mixed
+select -assert-count 3 t:FDRE
+select -assert-count 3 t:FDRE a:ASYNC_REG %i
+select -assert-count 1 t:SRL16E
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -top sync_var
+select -assert-count 4 t:FDRE
+select -assert-none t:SRL16E t:SRLC32E
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -top dsp_in
+select -assert-count 1 t:DSP48E1
+select -assert-count 16 t:FDRE a:ASYNC_REG %i
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -top ram_addr
+select -assert-count 4 t:FDRE a:ASYNC_REG %i
+
+design -load read
+hierarchy -top chain3
+proc
+opt_clean
+select -assert-none t:$dff a:ASYNC_REG %i
+design -load read
+hierarchy -top sync3
+proc
+select -assert-count 1 t:$dff a:ASYNC_REG %i
+design -load read
+hierarchy -top mixed
+proc
+select -assert-count 2 t:$dff
+select -assert-count 1 t:$dff a:ASYNC_REG %i
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -dff -top sync_pair
+select -assert-count 4 t:FDRE
+select -assert-count 4 t:FDRE a:ASYNC_REG %i
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -abc9 -dff -top sync_pair
+select -assert-count 4 t:FDRE
+select -assert-count 4 t:FDRE a:ASYNC_REG %i
+
+design -load read
+hierarchy -top sync_pair
+proc
+equiv_opt -async2sync -assert -map +/xilinx/cells_sim.v synth_xilinx -noiopad -noclkbuf -abc9 -dff
+
+design -load read
+hierarchy -top mixed
+proc
+equiv_opt -async2sync -assert -map +/xilinx/cells_sim.v synth_xilinx -noiopad -noclkbuf
