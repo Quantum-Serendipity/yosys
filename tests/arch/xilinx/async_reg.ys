@@ -191,3 +191,9 @@ design -load read
 hierarchy -top mixed
 proc
 equiv_opt -async2sync -assert -map +/xilinx/cells_sim.v synth_xilinx -noiopad -noclkbuf
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -top sync_pair
+opt_merge -share_all
+select -assert-count 4 t:FDRE
+select -assert-count 4 t:FDRE a:ASYNC_REG %i
