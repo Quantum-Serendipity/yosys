@@ -4548,11 +4548,11 @@ bool RTLIL::AttrObject::get_async_reg_attribute() const
 	return false;
 }
 
-bool RTLIL::Cell::has_async_reg_attr() const
+bool RTLIL::Cell::has_async_reg_attr(RTLIL::IdString q_port) const
 {
 	if (get_async_reg_attribute())
 		return true;
-	auto it = connections_.find(ID::Q);
+	auto it = connections_.find(q_port);
 	if (it == connections_.end())
 		return false;
 	for (auto &chunk : it->second.chunks())

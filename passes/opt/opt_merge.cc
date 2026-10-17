@@ -288,7 +288,7 @@ struct OptMergeThreadWorker
 				continue;
 			if (mode_keepdc && has_dont_care_initval(cell))
 				continue;
-			if (cell->is_builtin_ff() && cell->has_async_reg_attr())
+			if (cell->has_async_reg_attr())
 				continue;
 			if (!cell->known())
 				continue;

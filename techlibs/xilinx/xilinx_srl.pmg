@@ -12,8 +12,7 @@ endcode
 
 match first
 	select first->type.in($_DFF_N_, $_DFF_P_, $_DFFE_NN_, $_DFFE_NP_, $_DFFE_PN_, $_DFFE_PP_, \FDRE, \FDRE_1)
-	select !first->has_keep_attr()
-	select !first->has_async_reg_attr()
+	select !first->has_keep_attr() && !first->has_async_reg_attr()
 	select !first->type.in(\FDRE) || !param(first, \IS_R_INVERTED).as_bool()
 	select !first->type.in(\FDRE) || !param(first, \IS_D_INVERTED).as_bool()
 	select !first->type.in(\FDRE, \FDRE_1) || port(first, \R, State::S0).is_fully_zero()
@@ -84,8 +83,7 @@ arg en_port
 
 match first
 	select first->type.in($_DFF_N_, $_DFF_P_, $_DFFE_NN_, $_DFFE_NP_, $_DFFE_PN_, $_DFFE_PP_, \FDRE, \FDRE_1)
-	select !first->has_keep_attr()
-	select !first->has_async_reg_attr()
+	select !first->has_keep_attr() && !first->has_async_reg_attr()
 	select !first->type.in(\FDRE) || !param(first, \IS_R_INVERTED).as_bool()
 	select !first->type.in(\FDRE) || !param(first, \IS_D_INVERTED).as_bool()
 	select !first->type.in(\FDRE, \FDRE_1) || port(first, \R, State::S0).is_fully_zero()
@@ -106,8 +104,7 @@ endcode
 
 match next
 	select next->type.in($_DFF_N_, $_DFF_P_, $_DFFE_NN_, $_DFFE_NP_, $_DFFE_PN_, $_DFFE_PP_, \FDRE, \FDRE_1)
-	select !next->has_keep_attr()
-	select !next->has_async_reg_attr()
+	select !next->has_keep_attr() && !next->has_async_reg_attr()
 	select port(next, \D)[0].wire && !port(next, \D)[0].wire->get_bool_attribute(\keep)
 	select nusers(port(next, \Q)) == 2
 	index <IdString> next->type === first->type
@@ -134,8 +131,7 @@ arg en_port
 match next
 	semioptional
 	select next->type.in($_DFF_N_, $_DFF_P_, $_DFFE_NN_, $_DFFE_NP_, $_DFFE_PN_, $_DFFE_PP_, \FDRE, \FDRE_1)
-	select !next->has_keep_attr()
-	select !next->has_async_reg_attr()
+	select !next->has_keep_attr() && !next->has_async_reg_attr()
 	select port(next, \D)[0].wire && !port(next, \D)[0].wire->get_bool_attribute(\keep)
 	select nusers(port(next, \Q)) == 2
 	index <IdString> next->type === chain.back()->type
@@ -204,8 +200,7 @@ endcode
 
 match first
 	select first->type.in($_DFF_N_, $_DFF_P_, $_DFFE_NN_, $_DFFE_NP_, $_DFFE_PN_, $_DFFE_PP_, $dff, $dffe)
-	select !first->has_keep_attr()
-	select !first->has_async_reg_attr()
+	select !first->has_keep_attr() && !first->has_async_reg_attr()
 	select port(first, \Q)[0].wire && !port(first, \Q)[0].wire->get_bool_attribute(\keep)
 	slice idx GetSize(port(first, \Q))
 	select nusers(port(first, \Q)[idx]) <= 2
@@ -276,8 +271,7 @@ arg en_port
 match next
 	semioptional
 	select next->type.in($_DFF_N_, $_DFF_P_, $_DFFE_NN_, $_DFFE_NP_, $_DFFE_PN_, $_DFFE_PP_, $dff, $dffe)
-	select !next->has_keep_attr()
-	select !next->has_async_reg_attr()
+	select !next->has_keep_attr() && !next->has_async_reg_attr()
 	select port(next, \D)[0].wire && !port(next, \D)[0].wire->get_bool_attribute(\keep)
 	slice idx GetSize(port(next, \Q))
 	select nusers(port(next, \Q)[idx]) <= 3

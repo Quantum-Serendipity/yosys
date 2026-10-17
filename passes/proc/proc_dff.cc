@@ -289,17 +289,6 @@ void proc_dff(RTLIL::Module *mod, RTLIL::Process *proc, ConstEval &ce)
 	}
 }
 
-void copy_async_reg_attributes(RTLIL::Cell *cell)
-{
-	for (auto &chunk : cell->getPort(ID::Q).chunks()) {
-		if (!chunk.wire || !chunk.wire->get_async_reg_attribute())
-			continue;
-		for (auto &it : chunk.wire->attributes)
-			if (RTLIL::AttrObject::is_async_reg_attribute(it.first) && !cell->attributes.count(it.first))
-				cell->attributes[it.first] = it.second;
-	}
-}
-
 void proc_dff_async_reg(RTLIL::Module *mod, const pool<RTLIL::Cell*> &new_cells)
 {
 	SigMap sigmap;
@@ -311,10 +300,12 @@ void proc_dff_async_reg(RTLIL::Module *mod, const pool<RTLIL::Cell*> &new_cells)
 			continue;
 		RTLIL::SigSpec sig_q = cell->getPort(ID::Q);
 		std::vector<int> async_bits, other_bits;
+		pool<RTLIL::Wire*> async_wires;
 		for (int i = 0; i < GetSize(sig_q); i++) {
-			if (sig_q[i].wire && sig_q[i].wire->get_async_reg_attribute())
+			if (sig_q[i].wire && sig_q[i].wire->get_async_reg_attribute()) {
 				async_bits.push_back(i);
-			else
+				async_wires.insert(sig_q[i].wire);
+			} else
 				other_bits.push_back(i);
 		}
 		if (async_bits.empty())
@@ -332,8 +323,12 @@ void proc_dff_async_reg(RTLIL::Module *mod, const pool<RTLIL::Cell*> &new_cells)
 			cell = ff_async.emit();
 			ff_other.emit();
 		}
-		if (cell)
-			copy_async_reg_attributes(cell);
+		if (!cell)
+			continue;
+		for (auto wire : async_wires)
+			for (auto &it : wire->attributes)
+				if (RTLIL::AttrObject::is_async_reg_attribute(it.first) && !cell->attributes.count(it.first))
+					cell->attributes[it.first] = it.second;
 	}
 }
 

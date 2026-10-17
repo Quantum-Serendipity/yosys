@@ -2546,7 +2546,7 @@ public:
 				module->design->module(type)->get_bool_attribute(ID::keep));
 	}
 
-	bool has_async_reg_attr() const;
+	bool has_async_reg_attr(RTLIL::IdString q_port = ID::Q) const;
 
 	template<typename T> void rewrite_sigspecs(T &functor);
 	template<typename T> void rewrite_sigspecs2(T &functor);
