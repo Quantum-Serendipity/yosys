@@ -1,0 +1,17 @@
+logger -expect error "Y port signal .* already driven by" 1
+read_rtlil <<EOT
+module \top
+  wire input 1 \a
+  wire input 2 \b
+  wire input 3 \s
+  wire output 4 \y
+  cell $mux $m
+    parameter \WIDTH 2
+    connect \A { \a \a }
+    connect \B { \b \b }
+    connect \S \s
+    connect \Y { \y \y }
+  end
+end
+EOT
+opt_muxtree
