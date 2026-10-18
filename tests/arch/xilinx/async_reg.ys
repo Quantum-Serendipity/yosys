@@ -1,3 +1,4 @@
+logger -expect warning "Attribute .Async_Reg. is not recognised as ASYNC_REG" 1
 read_verilog <<EOT
 module sync3(input clk, a, output q);
 (* ASYNC_REG = "TRUE" *) reg [2:0] s = 3'b000;
@@ -269,6 +270,7 @@ always @(posedge clk_b) s <= {s[0], x[1]};
 assign q = s[1];
 endmodule
 EOT
+logger -check-expected
 design -save read2
 
 design -load read
@@ -297,9 +299,7 @@ select -assert-count 1 t:SRL16E
 select -assert-none t:FDRE
 
 design -load read2
-logger -expect warning "carries attribute Async_Reg, which is not recognised as ASYNC_REG" 1
 synth_xilinx -noiopad -noclkbuf -top chain3_mixedcase
-logger -check-expected
 select -assert-count 1 t:SRL16E
 select -assert-none t:FDRE
 
@@ -348,3 +348,16 @@ logger -expect log "[0-9] cells in clk=\\clk_a" 1
 abc -dff
 logger -check-expected
 select -assert-count 2 t:$_DFF_P_ a:ASYNC_REG %i
+
+design -reset
+logger -expect warning "Attribute .aSYNC_REG. is not recognised as ASYNC_REG" 1
+logger -expect warning "Attribute .Async_reg. is not recognised as ASYNC_REG" 1
+read_verilog <<EOT
+module hand_fdre(input clk, a, output q);
+wire m0, m1;
+(* aSYNC_REG = "TRUE" *) FDRE f0 (.C(clk), .CE(1'b1), .R(1'b0), .D(a), .Q(m0));
+(* ASYNC_REG = "TRUE" *) FDRE f1 (.C(clk), .CE(1'b1), .R(1'b0), .D(m0), .Q(m1));
+(* async_reg = "TRUE", Async_reg *) FDRE f2 (.C(clk), .CE(1'b1), .R(1'b0), .D(m1), .Q(q));
+endmodule
+EOT
+logger -check-expected

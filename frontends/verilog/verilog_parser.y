@@ -231,6 +231,16 @@
 			node->children.push_back(std::move(rangeNode));
 		}
 
+		static void warnNoncanonicalAsyncReg(const frontend_verilog_yy::parser::location_type& loc, const std::string &name)
+		{
+			if (name.empty() || name[0] != '\\' || name == "\\ASYNC_REG" || name == "\\async_reg")
+				return;
+			std::string folded = name.substr(1);
+			std::transform(folded.begin(), folded.end(), folded.begin(), [](unsigned char c) { return std::tolower(c); });
+			if (folded == "async_reg")
+				warn_at_loc(loc, "Attribute `%s' is not recognised as ASYNC_REG; write ASYNC_REG or async_reg.", name.substr(1));
+		}
+
 		static void checkLabelsMatch(const frontend_verilog_yy::parser::location_type& loc, const char *element, const std::string* before, const std::string *after)
 		{
 			if (!before && after)
@@ -659,9 +669,11 @@ attr_list:
 
 attr_assign:
 	hierarchical_id {
+		warnNoncanonicalAsyncReg(@1, *$1);
 		(*extra->attr_list)[*$1] = AstNode::mkconst_int(@1, 1, false);
 	} |
 	hierarchical_id TOK_EQ expr {
+		warnNoncanonicalAsyncReg(@1, *$1);
 		(*extra->attr_list)[*$1] = std::move($3);
 	};
 

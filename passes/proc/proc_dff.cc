@@ -21,8 +21,9 @@
 #include "kernel/sigtools.h"
 #include "kernel/consteval.h"
 #include "kernel/log.h"
-#include <sstream>
 #include "kernel/ff.h"
+#include <sstream>
+#include <stdlib.h>
 #include <stdio.h>
 
 USING_YOSYS_NAMESPACE
@@ -289,27 +290,11 @@ void proc_dff(RTLIL::Module *mod, RTLIL::Process *proc, ConstEval &ce)
 	}
 }
 
-static void proc_dff_warn_async_reg_spelling(RTLIL::Wire *wire, pool<RTLIL::Wire*> &checked)
-{
-	if (!checked.insert(wire).second)
-		return;
-	for (auto &it : wire->attributes) {
-		if (!it.first.isPublic() || RTLIL::AttrObject::is_async_reg_attribute(it.first))
-			continue;
-		std::string name = it.first.str().substr(1);
-		std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
-		if (name == "async_reg")
-			log_warning("Wire %s.%s carries attribute %s, which is not recognised as ASYNC_REG; write ASYNC_REG or async_reg.\n",
-					log_id(wire->module), log_id(wire), log_id(it.first));
-	}
-}
-
 void proc_dff_async_reg(RTLIL::Module *mod, const pool<RTLIL::Cell*> &new_cells)
 {
 	SigMap sigmap;
 	FfInitVals initvals;
 	bool initvals_set = false;
-	pool<RTLIL::Wire*> checked;
 
 	for (auto cell : new_cells) {
 		if (!cell->is_builtin_ff())
@@ -317,8 +302,6 @@ void proc_dff_async_reg(RTLIL::Module *mod, const pool<RTLIL::Cell*> &new_cells)
 		RTLIL::SigSpec sig_q = cell->getPort(ID::Q);
 		std::vector<int> async_bits, other_bits;
 		for (int i = 0; i < GetSize(sig_q); i++) {
-			if (sig_q[i].wire)
-				proc_dff_warn_async_reg_spelling(sig_q[i].wire, checked);
 			if (sig_q[i].wire && sig_q[i].wire->get_async_reg_attribute()) {
 				async_bits.push_back(i);
 			} else
