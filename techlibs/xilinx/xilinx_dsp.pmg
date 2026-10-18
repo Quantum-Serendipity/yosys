@@ -284,9 +284,23 @@ code argQ ffD sigD clock
 		argQ = sigD;
 		subpattern(in_dffe);
 		if (dff) {
+			if (ffAD) {
+				bool ad_srst = ffAD->type.in($sdff, $sdffe);
+				if (dff->type.in($sdff, $sdffe) != ad_srst)
+					goto ffD_end;
+				if (ad_srst) {
+					if (param(dff, \SRST_POLARITY) != param(ffAD, \SRST_POLARITY))
+						goto ffD_end;
+					if (port(dff, \SRST) != port(ffAD, \SRST))
+						goto ffD_end;
+				}
+			}
+
 			ffD = dff;
 			clock = dffclock;
 			sigD = dffD;
+
+ffD_end:		;
 		}
 	}
 endcode
