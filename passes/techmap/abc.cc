@@ -2488,6 +2488,8 @@ struct AbcPass : public Pass {
 
 					if (!cell->is_builtin_ff())
 						continue;
+					if (cell->has_async_reg_attr())
+						continue;
 
 					FfData ff(&initvals, cell);
 					if (!ff.has_clk)

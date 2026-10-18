@@ -197,3 +197,154 @@ synth_xilinx -noiopad -noclkbuf -top sync_pair
 opt_merge -share_all
 select -assert-count 4 t:FDRE
 select -assert-count 4 t:FDRE a:ASYNC_REG %i
+
+design -reset
+read_verilog <<EOT
+module sync3_bare(input clk, a, output q);
+(* ASYNC_REG *) reg [2:0] s = 3'b000;
+always @(posedge clk) s <= {s[1:0], a};
+assign q = s[2];
+endmodule
+
+module sync3_one(input clk, a, output q);
+(* ASYNC_REG = 1 *) reg [2:0] s = 3'b000;
+always @(posedge clk) s <= {s[1:0], a};
+assign q = s[2];
+endmodule
+
+module chain3_zero(input clk, a, output q);
+(* ASYNC_REG = 0 *) reg [2:0] s = 3'b000;
+always @(posedge clk) s <= {s[1:0], a};
+assign q = s[2];
+endmodule
+
+module chain3_no(input clk, a, output q);
+(* ASYNC_REG = "no" *) reg [2:0] s = 3'b000;
+always @(posedge clk) s <= {s[1:0], a};
+assign q = s[2];
+endmodule
+
+module chain3_mixedcase(input clk, a, output q);
+(* Async_Reg = "TRUE" *) reg [2:0] s = 3'b000;
+always @(posedge clk) s <= {s[1:0], a};
+assign q = s[2];
+endmodule
+
+module plain3_then_sync1(input clk, a, output q);
+reg [2:0] p = 3'b000;
+(* ASYNC_REG = "TRUE" *) reg s = 1'b0;
+always @(posedge clk) begin
+	p <= {p[1:0], a};
+	s <= p[2];
+end
+assign q = s;
+endmodule
+
+module sync1_then_plain3(input clk, a, output q);
+(* ASYNC_REG = "TRUE" *) reg s = 1'b0;
+reg [2:0] p = 3'b000;
+always @(posedge clk) begin
+	s <= a;
+	p <= {p[1:0], s};
+end
+assign q = p[2];
+endmodule
+
+module plain_into_sync(input clk, a, b, output q);
+reg p = 1'b0;
+(* ASYNC_REG = "TRUE" *) reg [1:0] s = 2'b00;
+always @(posedge clk) begin
+	p <= a ^ b;
+	s <= {s[0], p};
+end
+assign q = s[1];
+endmodule
+
+module two_domain(input clk_a, clk_b, a, b, c, output q, r);
+reg [1:0] x = 2'b00;
+always @(posedge clk_a) x <= {x[0] ^ b, a & c};
+assign r = x[1];
+(* ASYNC_REG = "TRUE" *) reg [1:0] s = 2'b00;
+always @(posedge clk_b) s <= {s[0], x[1]};
+assign q = s[1];
+endmodule
+EOT
+design -save read2
+
+design -load read
+synth_xilinx -noiopad -noclkbuf -top sync3_lower
+select -assert-count 3 t:FDRE a:ASYNC_REG %i
+select -assert-none t:FDRE a:async_reg %i
+
+design -load read2
+synth_xilinx -noiopad -noclkbuf -top sync3_bare
+select -assert-count 3 t:FDRE a:ASYNC_REG %i
+select -assert-none t:SRL16E t:SRLC32E
+
+design -load read2
+synth_xilinx -noiopad -noclkbuf -top sync3_one
+select -assert-count 3 t:FDRE a:ASYNC_REG %i
+select -assert-none t:SRL16E t:SRLC32E
+
+design -load read2
+synth_xilinx -noiopad -noclkbuf -top chain3_zero
+select -assert-count 1 t:SRL16E
+select -assert-none t:FDRE
+
+design -load read2
+synth_xilinx -noiopad -noclkbuf -top chain3_no
+select -assert-count 1 t:SRL16E
+select -assert-none t:FDRE
+
+design -load read2
+logger -expect warning "carries attribute Async_Reg, which is not recognised as ASYNC_REG" 1
+synth_xilinx -noiopad -noclkbuf -top chain3_mixedcase
+logger -check-expected
+select -assert-count 1 t:SRL16E
+select -assert-none t:FDRE
+
+design -load read2
+synth_xilinx -noiopad -noclkbuf -top plain3_then_sync1
+select -assert-count 1 t:SRL16E
+select -assert-count 1 t:FDRE
+select -assert-count 1 t:FDRE a:ASYNC_REG %i
+
+design -load read2
+synth_xilinx -noiopad -noclkbuf -top sync1_then_plain3
+select -assert-count 1 t:SRL16E
+select -assert-count 1 t:FDRE
+select -assert-count 1 t:FDRE a:ASYNC_REG %i
+
+design -load read
+hierarchy -top sync3
+proc
+techmap
+abc -dff -clk clk
+select -assert-count 3 t:$_DFF_P_
+select -assert-count 3 t:$_DFF_P_ a:ASYNC_REG %i
+
+design -load read
+hierarchy -top sync_pair
+proc
+techmap
+abc -dff -clk clk
+opt_merge
+select -assert-count 4 t:$_DFF_P_ a:ASYNC_REG %i
+
+design -load read2
+hierarchy -top plain_into_sync
+proc
+techmap
+abc -dff
+select -assert-count 3 t:$_DFF_P_
+select -assert-count 2 t:$_DFF_P_ a:ASYNC_REG %i
+
+design -load read2
+hierarchy -top two_domain
+proc
+techmap
+logger -expect log "[0-9] cells in clk=" 1
+logger -expect log "[0-9] cells in clk=\\clk_a" 1
+abc -dff
+logger -check-expected
+select -assert-count 2 t:$_DFF_P_ a:ASYNC_REG %i

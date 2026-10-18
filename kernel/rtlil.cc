@@ -4522,25 +4522,21 @@ bool RTLIL::Cell::is_builtin_ff() const {
 
 bool RTLIL::AttrObject::is_async_reg_attribute(RTLIL::IdString id)
 {
-	if (!id.isPublic())
-		return false;
-	std::string_view name(id.c_str() + 1);
-	std::string_view want("async_reg");
-	return name.size() == want.size() && std::equal(name.begin(), name.end(), want.begin(),
-			[](char a, char b) { return std::tolower((unsigned char)a) == b; });
+	return id == ID::ASYNC_REG || id == ID::async_reg;
 }
 
 bool RTLIL::AttrObject::get_async_reg_attribute() const
 {
-	for (const auto &it : attributes) {
-		if (!is_async_reg_attribute(it.first))
+	for (auto id : {ID::ASYNC_REG, ID::async_reg}) {
+		auto it = attributes.find(id);
+		if (it == attributes.end())
 			continue;
-		if (!(it.second.flags & RTLIL::CONST_FLAG_STRING)) {
-			if (it.second.as_bool())
+		if (!(it->second.flags & RTLIL::CONST_FLAG_STRING)) {
+			if (it->second.as_bool())
 				return true;
 			continue;
 		}
-		std::string value = it.second.decode_string();
+		std::string value = it->second.decode_string();
 		std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return std::tolower(c); });
 		if (!value.empty() && value != "false" && value != "no" && value != "0")
 			return true;
