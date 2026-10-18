@@ -50,6 +50,33 @@ always @(posedge clk) begin
 	p <= s * b;
 end
 endmodule
+
+module adreg_srst_n(input clk, rst_n, input signed [3:0] a, d, input signed [4:0] b, output reg signed [9:0] p);
+reg signed [4:0] s;
+always @(posedge clk) begin
+	if (!rst_n)
+		s <= 0;
+	else
+		s <= a + d;
+	p <= s * b;
+end
+endmodule
+
+module adreg_dreg_srst_oppositepol(input clk, rst, input signed [3:0] a, d, input signed [4:0] b, output reg signed [9:0] p);
+reg signed [3:0] d_r;
+reg signed [4:0] s;
+always @(posedge clk) begin
+	if (!rst)
+		d_r <= 0;
+	else
+		d_r <= d;
+	if (rst)
+		s <= 0;
+	else
+		s <= a + d_r;
+	p <= s * b;
+end
+endmodule
 EOT
 design -save read
 
@@ -97,4 +124,27 @@ select -assert-count 1 t:DSP48E1
 select -assert-count 1 t:DSP48E1 r:ADREG=1 %i
 select -assert-count 1 t:DSP48E1 r:USE_DPORT=TRUE %i
 select -assert-count 1 t:DSP48E1 r:DREG=1 %i
+select -assert-count 1 t:DSP48E1 %x:+DSP48E1[RSTD] w:rst %i
+
+design -load read
+hierarchy -top adreg_srst_n
+proc
+equiv_opt -assert -map +/xilinx/cells_sim.v synth_xilinx -noiopad
+design -load postopt
+cd adreg_srst_n
+select -assert-count 1 t:DSP48E1
+select -assert-count 1 t:DSP48E1 r:ADREG=1 %i
+select -assert-count 1 t:DSP48E1 r:USE_DPORT=TRUE %i
+select -assert-none t:DSP48E1 %x:+DSP48E1[RSTD] w:rst_n %i
+
+design -load read
+hierarchy -top adreg_dreg_srst_oppositepol
+proc
+equiv_opt -assert -map +/xilinx/cells_sim.v synth_xilinx -noiopad
+design -load postopt
+cd adreg_dreg_srst_oppositepol
+select -assert-count 1 t:DSP48E1
+select -assert-count 1 t:DSP48E1 r:ADREG=1 %i
+select -assert-count 1 t:DSP48E1 r:USE_DPORT=TRUE %i
+select -assert-none t:DSP48E1 r:DREG=1 %i
 select -assert-count 1 t:DSP48E1 %x:+DSP48E1[RSTD] w:rst %i
