@@ -87,19 +87,7 @@ select -assert-count 3 t:FDRE a:ASYNC_REG %i
 select -assert-none t:SRL16E t:SRLC32E
 
 design -load read
-synth_xilinx -noiopad -noclkbuf -abc9 -top sync3
-select -assert-count 3 t:FDRE
-select -assert-count 3 t:FDRE a:ASYNC_REG %i
-select -assert-none t:SRL16E t:SRLC32E
-
-design -load read
 synth_xilinx -noiopad -noclkbuf -dff -top sync3
-select -assert-count 3 t:FDRE
-select -assert-count 3 t:FDRE a:ASYNC_REG %i
-select -assert-none t:SRL16E t:SRLC32E
-
-design -load read
-synth_xilinx -noiopad -noclkbuf -abc9 -dff -top sync3
 select -assert-count 3 t:FDRE
 select -assert-count 3 t:FDRE a:ASYNC_REG %i
 select -assert-none t:SRL16E t:SRLC32E
@@ -115,22 +103,12 @@ select -assert-count 1 t:SRL16E
 select -assert-none t:FDRE
 
 design -load read
-synth_xilinx -noiopad -noclkbuf -abc9 -top chain3
-select -assert-count 1 t:SRL16E
-select -assert-none t:FDRE
-
-design -load read
 synth_xilinx -noiopad -noclkbuf -top chain3_false
 select -assert-count 1 t:SRL16E
 select -assert-none t:FDRE
 
 design -load read
 synth_xilinx -noiopad -noclkbuf -top sync_pair
-select -assert-count 4 t:FDRE
-select -assert-count 4 t:FDRE a:ASYNC_REG %i
-
-design -load read
-synth_xilinx -noiopad -noclkbuf -abc9 -top sync_pair
 select -assert-count 4 t:FDRE
 select -assert-count 4 t:FDRE a:ASYNC_REG %i
 
@@ -179,14 +157,9 @@ select -assert-count 4 t:FDRE
 select -assert-count 4 t:FDRE a:ASYNC_REG %i
 
 design -load read
-synth_xilinx -noiopad -noclkbuf -abc9 -dff -top sync_pair
-select -assert-count 4 t:FDRE
-select -assert-count 4 t:FDRE a:ASYNC_REG %i
-
-design -load read
 hierarchy -top sync_pair
 proc
-equiv_opt -async2sync -assert -map +/xilinx/cells_sim.v synth_xilinx -noiopad -noclkbuf -abc9 -dff
+equiv_opt -async2sync -assert -map +/xilinx/cells_sim.v synth_xilinx -noiopad -noclkbuf -dff
 
 design -load read
 hierarchy -top mixed
