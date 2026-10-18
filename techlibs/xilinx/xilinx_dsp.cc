@@ -304,6 +304,11 @@ void xilinx_dsp_pack(xilinx_dsp_pm &pm)
 			}
 			else
 				cell->setPort(ID(CEAD), State::S1);
+			if (st.ffAD->type.in(ID($sdff), ID($sdffe))) {
+				SigSpec srst = st.ffAD->getPort(ID::SRST);
+				bool rstpol = st.ffAD->getParam(ID::SRST_POLARITY).as_bool();
+				cell->setPort(ID(RSTD), rstpol ? srst : pm.module->Not(NEW_ID, srst));
+			}
 			cell->setParam(ID(ADREG), 1);
 		}
 
