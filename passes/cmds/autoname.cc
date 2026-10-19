@@ -79,7 +79,6 @@ struct node {
 	unsigned int fanout = 0;
 	bool is_public = false;
 	bool renameable = false;
-	bool selected = false;
 
 	size_t name_length = 0;
 	// Node index from which we want to construct the rename
@@ -90,8 +89,6 @@ struct node {
 	string suffix;
 	// Is this name final?
 	bool decided = false;
-
-	const IdString& name() const { return cell ? cell->name : wire->name; }
 };
 
 // Decides the order of exploring neighbors
@@ -109,7 +106,7 @@ struct ModuleAutonamer
 
 	// Cells in module order, then wires in the order that they're seen from cells.
 	// The index doubles as the tie-break between equally good
-	// proposals for different nodes
+	// proposals for different nodes.
 	vector<node> nodes;
 	vector<int> decided;
 	std::priority_queue<queue_item, std::vector<queue_item>, std::greater<>> queue;
@@ -119,9 +116,9 @@ struct ModuleAutonamer
 
 	void build_adjacency()
 	{
-		vector<Cell*> cells(module->cells().begin(), module->cells().end());
-		// Arbitrary. Kinda just for passing tests without modifying them
-		for (auto cell : cells | std::views::reverse)
+		auto selected = module->selected_cells();
+		// Arbitrary. Kinda just for passing tests without modifying them.
+		for (auto cell : selected | std::views::reverse)
 			nodes.emplace_back().cell = cell;
 		int ncells = GetSize(nodes);
 
@@ -156,25 +153,23 @@ struct ModuleAutonamer
 			}
 		}
 
-		// Resolve selection before renaming
 		for (auto &nd : nodes) {
-			IdString name = nd.name();
-			nd.selected = nd.cell ? module->selected(nd.cell) : module->selected(nd.wire);
+			IdString name = nd.cell ? nd.cell->name : nd.wire->name;
 			nd.is_public = (name[0] != '$');
 			nd.renameable = !nd.is_public && (nd.cell || nd.wire->port_id == 0);
 			if (nd.is_public)
 				nd.name_length = name.str().size();
 		}
 
-		// Only possible once every fanout is known
+		// Only possible once every fanout is known.
 		for (auto &nd : nodes)
 			for (auto &edge : nd.edges)
 				edge.score = edge.cell_is_output ? 0 : nodes[edge.wire].fanout;
 	}
 
-	void offer(int from, int to, const Edge &edge, int edge_pos)
+	void offer(int from, int n, const Edge &edge, int edge_pos)
 	{
-		node &nd = nodes[to];
+		node &nd = nodes[n];
 		if (!nd.renameable || nd.decided)
 			return;
 		string suffix = nd.cell
@@ -187,7 +182,7 @@ struct ModuleAutonamer
 		nd.from_node = from;
 		nd.name_length = c.length;
 		nd.suffix = std::move(suffix);
-		queue.push(queue_item{c.score, c.length, to});
+		queue.push(queue_item{c.score, c.length, n});
 	}
 
 	// Expand a public (or newly decided) node. The name it lends
@@ -219,23 +214,15 @@ struct ModuleAutonamer
 		}
 	}
 
-	void append_name(int n, string &out)
-	{
-		const node &nd = nodes[n];
-		if (nd.is_public || nd.selected)
-			return nd.name().append_to(&out);
-		append_name(nd.from_node, out);
-		out += nd.suffix;
-	}
-
+	// The source neighbour is decided before this node, so commit() reaches it
+	// first and its name is already final -- uniquify() suffix and all.
 	void commit(int n)
 	{
 		node &nd = nodes[n];
-		if (!nd.selected)
-			return;
+		const node &src = nodes[nd.from_node];
 		string full;
 		full.reserve(nd.name_length);
-		append_name(nd.from_node, full);
+		(src.cell ? src.cell->name : src.wire->name).append_to(&full);
 		full += nd.suffix;
 		IdString name = module->uniquify(IdString(full));
 		if (nd.cell) {
