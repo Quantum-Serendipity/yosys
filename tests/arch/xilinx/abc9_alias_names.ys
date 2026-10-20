@@ -1,0 +1,35 @@
+read_verilog -lib -specify +/xilinx/cells_sim.v
+read_verilog abc9_alias_names.v
+synth_xilinx -flatten -abc9 -arch xc7 -top top
+check -assert
+select -assert-count 1 w:ddr_sys_clk
+select -assert-count 1 w:u_ddr3.o_sys_clk
+select -assert-count 1 w:u_ddr3.sys_clk
+select -assert-count 1 w:u_ddr3.r
+select -assert-count 1 w:u_ddr3.andab
+select -assert-count 1 w:u_ddr3.o_and
+select -assert-count 1 w:and_out
+select -assert-count 1 w:u_ddr3.sum
+select -assert-count 1 w:u_ddr3.kk
+select -assert-count 1 w:u_ddr3.ks
+select -assert-count 1 w:u_ddr3.rdat
+select -assert-count 1 w:ram_out
+select -assert-count 1 w:u_ddr3.mixw
+select -assert-count 1 w:mix_out
+select -assert-min 1 t:RAM32M t:RAM64M t:RAM16X1D t:RAM32X1D t:RAM64X1D t:RAM128X1D
+select -assert-min 1 t:CARRY4
+
+design -reset
+read_verilog -lib -specify +/xilinx/cells_sim.v
+read_verilog abc9_alias_names.v
+hierarchy -top top
+proc
+flatten
+memory -nomap
+equiv_opt -run :prove -map +/xilinx/cells_sim.v synth_xilinx -flatten -abc9 -arch xc7 -top top
+techmap -wb -D EQUIV -autoproc -map +/xilinx/cells_sim.v gold
+expose w:u_ddr3.sys_clk w:u_ddr3.r w:u_ddr3.andab w:u_ddr3.o_and w:and_out w:u_ddr3.sum w:u_ddr3.kk w:u_ddr3.ks w:u_ddr3.rdat w:ram_out w:u_ddr3.mixw w:mix_out
+memory
+opt_clean
+miter -equiv -flatten -make_assert -make_outputs gold gate miter
+sat -verify -prove-asserts -seq 2 -set-init-zero -timeout 300 -show-ports miter

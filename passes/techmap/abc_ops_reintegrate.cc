@@ -45,6 +45,14 @@ struct KeptWire {
 	int offset;
 };
 
+struct AliasRecord {
+	RTLIL::IdString wire;
+	int offset;
+	RTLIL::IdString source;
+	RTLIL::IdString port;
+	int source_offset;
+};
+
 void unmapped_error(RTLIL::Cell *cell)
 {
 	log_error("ABC returned unmapped node '%s'. Check your abc script.\n", cell);
@@ -68,6 +76,7 @@ void reintegrate(RTLIL::Module *module, bool dff_mode, bool stdcell_mode, std::s
 	dict<RTLIL::IdString, std::pair<int,int>> wideports_cache;
 	dict<RTLIL::IdString, PseudoPo> pseudopos;
 	dict<RTLIL::IdString, KeptWire> keptwires;
+	std::vector<AliasRecord> aliases;
 
 	if (!map_filename.empty()) {
 		std::ifstream mf(map_filename);
@@ -191,6 +200,19 @@ void reintegrate(RTLIL::Module *module, bool dff_mode, bool stdcell_mode, std::s
 
 				keptwires.insert({wire_name, KeptWire{escaped_s, index}});
 				log_debug("Mapping kept wire %s -> %s[%d]\n", wire, escaped_s, index);
+			}
+			else if (type == "aliaswire") {
+				std::string source;
+				mf >> source;
+				aliases.push_back(AliasRecord{escaped_s, index, RTLIL::escape_id(source), RTLIL::IdString(), variable});
+			}
+			else if (type == "aliasconst") {
+				aliases.push_back(AliasRecord{escaped_s, index, RTLIL::IdString(), RTLIL::IdString(), variable});
+			}
+			else if (type == "aliaspin") {
+				std::string cell, port;
+				mf >> cell >> port;
+				aliases.push_back(AliasRecord{escaped_s, index, RTLIL::escape_id(cell), RTLIL::escape_id(port), variable});
 			}
 			else if (type == "box") {
 				RTLIL::Cell* cell = mapped_mod->cell(stringf("$box%d", variable));
@@ -701,8 +723,87 @@ clone_lut:
 		}
 	}
 
+	int alias_bits = 0;
+	if (!aliases.empty()) {
+		SigMap sigmap(module);
+		pool<RTLIL::SigBit> driven;
+		for (auto wire : module->wires())
+			if (wire->port_input)
+				for (auto bit : sigmap(wire))
+					driven.insert(bit);
+		dict<RTLIL::SigBit, std::pair<RTLIL::Cell *, int>> buf_drivers;
+		for (auto cell : module->cells()) {
+			if (cell->type == ID($buf)) {
+				RTLIL::SigSpec y = sigmap(cell->getPort(ID::Y));
+				for (int i = 0; i < GetSize(y); i++)
+					buf_drivers[y[i]] = std::make_pair(cell, i);
+				continue;
+			}
+			for (auto &conn : cell->connections())
+				if (cell->output(conn.first))
+					for (auto bit : sigmap(conn.second))
+						driven.insert(bit);
+		}
+
+		for (auto &alias : aliases) {
+			RTLIL::Wire *wire = module->wire(alias.wire);
+			if (!wire)
+				continue;
+			int offset = alias.offset - wire->start_offset;
+			if (offset < 0 || offset >= GetSize(wire))
+				continue;
+			RTLIL::SigBit source;
+			if (alias.source.empty()) {
+				source = alias.source_offset == 2 ? RTLIL::State::Sx :
+						alias.source_offset ? RTLIL::State::S1 : RTLIL::State::S0;
+			} else if (alias.port.empty()) {
+				RTLIL::Wire *source_wire = module->wire(alias.source);
+				if (!source_wire)
+					continue;
+				int source_offset = alias.source_offset - source_wire->start_offset;
+				if (source_offset < 0 || source_offset >= GetSize(source_wire))
+					continue;
+				source = RTLIL::SigBit(source_wire, source_offset);
+			} else {
+				RTLIL::Cell *cell = module->cell(alias.source);
+				if (!cell || !cell->hasPort(alias.port))
+					continue;
+				const RTLIL::SigSpec &port = cell->getPort(alias.port);
+				if (alias.source_offset >= GetSize(port))
+					continue;
+				source = port[alias.source_offset];
+				if (!source.wire && source.data == RTLIL::State::Sx)
+					continue;
+			}
+			RTLIL::SigBit target = sigmap(RTLIL::SigBit(wire, offset));
+			RTLIL::SigBit mapped_source = sigmap(source);
+			for (int n = 0; n <= GetSize(buf_drivers) && target.wire && !driven.count(target); n++) {
+				auto it = buf_drivers.find(target);
+				if (it == buf_drivers.end())
+					break;
+				RTLIL::SigBit a = it->second.first->getPort(ID::A)[it->second.second];
+				if (!a.wire) {
+					driven.insert(target);
+					break;
+				}
+				target = sigmap(a);
+			}
+			if (target == mapped_source)
+				continue;
+			if (!target.wire || driven.count(target))
+				log_error("Alias record for %s[%d] would connect %s to %s, which is already driven.\n",
+						wire, offset, log_signal(source), log_signal(target));
+			module->connect(target, source);
+			sigmap.add(target, source);
+			if (!mapped_source.wire || driven.count(mapped_source))
+				driven.insert(sigmap(target));
+			alias_bits++;
+		}
+	}
+
 	log("ABC RESULTS:           input signals: %8d\n", in_wires);
 	log("ABC RESULTS:          output signals: %8d\n", out_wires);
+	log("ABC RESULTS:      public alias bits: %8d\n", alias_bits);
 
 	design->remove(mapped_mod);
 }
