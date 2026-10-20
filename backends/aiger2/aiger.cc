@@ -1701,50 +1701,56 @@ struct XAigerWriter : AigerWriter {
 
 		std::vector<Wire *> retained;
 		for (auto wire : top->wires()) {
-			if (!wire->name.isPublic() || wire->port_input || wire->port_output)
+			if (!wire->name.isPublic() || wire->port_input || wire->port_output || is_keep_po(wire))
 				continue;
 			bool kept = keep_wires.count(wire);
-			bool any = false;
+			std::vector<std::string> records;
+			std::vector<int> unresolved;
 			for (int i = 0; i < GetSize(wire); i++) {
+				int index = wire->start_offset + i;
 				SigBit src = alias_source(SigBit(wire, i));
 				auto o = alias_box_outputs.find(src);
 				if (o != alias_box_outputs.end()) {
 					auto &[box, port, offset] = o->second;
-					map_file << "aliaspin " << offset << " " << wire->start_offset + i
-							<< " " << wire->name.c_str() << " " << box->name.c_str()
-							<< " " << port.c_str() << "\n";
-					any = true;
+					records.push_back(stringf("aliaspin %d %d %s %s %s\n", offset, index,
+							wire->name.c_str(), box->name.c_str(), port.c_str()));
 					continue;
 				}
 				if (kept)
 					continue;
 				if (!src.wire) {
-					if (src.data == State::S0 || src.data == State::S1) {
-						map_file << "aliasconst " << (src.data == State::S1 ? 1 : 0) << " "
-								<< wire->start_offset + i << " " << wire->name.c_str() << "\n";
-						any = true;
-					}
+					if (src.data == State::S0 || src.data == State::S1)
+						records.push_back(stringf("aliasconst %d %d %s\n", src.data == State::S1 ? 1 : 0,
+								index, wire->name.c_str()));
+					else
+						unresolved.push_back(index);
 					continue;
 				}
 				auto s = survivor.find(src);
 				if (s != survivor.end() && s->second.wire != wire) {
-					map_file << "aliaswire " << s->second.wire->start_offset + s->second.offset
-							<< " " << wire->start_offset + i << " " << wire->name.c_str()
-							<< " " << s->second.wire->name.c_str() << "\n";
-					any = true;
+					records.push_back(stringf("aliaswire %d %d %s %s\n",
+							s->second.wire->start_offset + s->second.offset, index,
+							wire->name.c_str(), s->second.wire->name.c_str()));
 					continue;
 				}
 				auto p = alias_box_pins.find(src);
 				if (p != alias_box_pins.end()) {
 					auto &[box, port, offset] = p->second;
-					map_file << "aliaspin " << offset << " " << wire->start_offset + i
-							<< " " << wire->name.c_str() << " " << box->name.c_str()
-							<< " " << port.c_str() << "\n";
-					any = true;
+					records.push_back(stringf("aliaspin %d %d %s %s %s\n", offset, index,
+							wire->name.c_str(), box->name.c_str(), port.c_str()));
+					continue;
 				}
+				unresolved.push_back(index);
 			}
-			if (any && !kept)
-				retained.push_back(wire);
+			if (records.empty())
+				continue;
+			for (auto &record : records)
+				map_file << record;
+			if (kept)
+				continue;
+			for (int index : unresolved)
+				map_file << stringf("aliasconst 2 %d %s\n", index, wire->name.c_str());
+			retained.push_back(wire);
 		}
 		for (auto wire : retained)
 			keep_wires.insert(wire);

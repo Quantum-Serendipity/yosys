@@ -724,37 +724,126 @@ clone_lut:
 	}
 
 	int alias_bits = 0;
-	for (auto &alias : aliases) {
-		RTLIL::Wire *wire = module->wire(alias.wire);
-		if (!wire)
-			continue;
-		int offset = alias.offset - wire->start_offset;
-		if (offset < 0 || offset >= GetSize(wire))
-			continue;
-		RTLIL::SigBit source;
-		if (alias.source.empty()) {
-			source = alias.source_offset ? RTLIL::State::S1 : RTLIL::State::S0;
-		} else if (alias.port.empty()) {
-			RTLIL::Wire *source_wire = module->wire(alias.source);
-			if (!source_wire)
-				continue;
-			int source_offset = alias.source_offset - source_wire->start_offset;
-			if (source_offset < 0 || source_offset >= GetSize(source_wire))
-				continue;
-			source = RTLIL::SigBit(source_wire, source_offset);
-		} else {
-			RTLIL::Cell *cell = module->cell(alias.source);
-			if (!cell || !cell->hasPort(alias.port))
-				continue;
-			const RTLIL::SigSpec &port = cell->getPort(alias.port);
-			if (alias.source_offset >= GetSize(port))
-				continue;
-			source = port[alias.source_offset];
-			if (!source.wire && source.data == RTLIL::State::Sx)
-				continue;
+	if (!aliases.empty()) {
+		pool<RTLIL::SigBit> targets;
+		for (auto &alias : aliases) {
+			RTLIL::Wire *wire = module->wire(alias.wire);
+			if (wire && alias.offset - wire->start_offset >= 0 && alias.offset - wire->start_offset < GetSize(wire))
+				targets.insert(RTLIL::SigBit(wire, alias.offset - wire->start_offset));
 		}
-		module->connect(RTLIL::SigBit(wire, offset), source);
-		alias_bits++;
+		SigMap wiremap;
+		for (auto &conn : module->connections())
+			for (int i = 0; i < GetSize(conn.first); i++)
+				if (conn.first[i].wire && conn.second[i].wire)
+					wiremap.add(conn.first[i], conn.second[i]);
+		pool<RTLIL::SigBit> target_nets;
+		for (auto bit : targets)
+			target_nets.insert(wiremap(bit));
+
+		std::vector<RTLIL::SigSig> stripped;
+		bool changed = false;
+		for (auto &conn : module->connections()) {
+			RTLIL::SigSpec lhs, rhs;
+			for (int i = 0; i < GetSize(conn.first); i++) {
+				if (conn.second[i] == RTLIL::State::Sx && target_nets.count(wiremap(conn.first[i]))) {
+					changed = true;
+					continue;
+				}
+				lhs.append(conn.first[i]);
+				rhs.append(conn.second[i]);
+			}
+			if (GetSize(lhs))
+				stripped.push_back(RTLIL::SigSig(lhs, rhs));
+		}
+		if (changed)
+			module->new_connections(stripped);
+
+		SigMap sigmap(module);
+		pool<RTLIL::SigBit> driven;
+		for (auto wire : module->wires())
+			if (wire->port_input)
+				for (auto bit : sigmap(wire))
+					driven.insert(bit);
+		dict<RTLIL::SigBit, std::pair<RTLIL::Cell *, int>> buf_drivers;
+		for (auto cell : module->cells()) {
+			if (cell->type == ID($buf)) {
+				RTLIL::SigSpec y = sigmap(cell->getPort(ID::Y));
+				for (int i = 0; i < GetSize(y); i++)
+					buf_drivers[y[i]] = std::make_pair(cell, i);
+				continue;
+			}
+			for (auto &conn : cell->connections())
+				if (cell->output(conn.first))
+					for (auto bit : sigmap(conn.second))
+						driven.insert(bit);
+		}
+
+		for (auto &alias : aliases) {
+			RTLIL::Wire *wire = module->wire(alias.wire);
+			if (!wire)
+				continue;
+			int offset = alias.offset - wire->start_offset;
+			if (offset < 0 || offset >= GetSize(wire))
+				continue;
+			RTLIL::SigBit source;
+			if (alias.source.empty()) {
+				source = alias.source_offset == 2 ? RTLIL::State::Sx :
+						alias.source_offset ? RTLIL::State::S1 : RTLIL::State::S0;
+			} else if (alias.port.empty()) {
+				RTLIL::Wire *source_wire = module->wire(alias.source);
+				if (!source_wire)
+					continue;
+				int source_offset = alias.source_offset - source_wire->start_offset;
+				if (source_offset < 0 || source_offset >= GetSize(source_wire))
+					continue;
+				source = RTLIL::SigBit(source_wire, source_offset);
+			} else {
+				RTLIL::Cell *cell = module->cell(alias.source);
+				if (!cell || !cell->hasPort(alias.port))
+					continue;
+				const RTLIL::SigSpec &port = cell->getPort(alias.port);
+				if (alias.source_offset >= GetSize(port))
+					continue;
+				source = port[alias.source_offset];
+				if (!source.wire && source.data == RTLIL::State::Sx)
+					continue;
+			}
+			RTLIL::SigBit target = sigmap(RTLIL::SigBit(wire, offset));
+			RTLIL::SigBit mapped_source = sigmap(source);
+			RTLIL::Cell *placeholder = nullptr;
+			int placeholder_index = 0;
+			for (int n = 0; n <= GetSize(buf_drivers) && target.wire && !driven.count(target); n++) {
+				auto it = buf_drivers.find(target);
+				if (it == buf_drivers.end())
+					break;
+				RTLIL::SigBit a = it->second.first->getPort(ID::A)[it->second.second];
+				if (a == RTLIL::State::Sx) {
+					placeholder = it->second.first;
+					placeholder_index = it->second.second;
+					break;
+				}
+				target = sigmap(a);
+			}
+			if (target == mapped_source)
+				continue;
+			if (placeholder) {
+				RTLIL::SigSpec a = placeholder->getPort(ID::A);
+				a[placeholder_index] = source;
+				placeholder->setPort(ID::A, a);
+				buf_drivers.erase(target);
+				driven.insert(target);
+				alias_bits++;
+				continue;
+			}
+			if (!target.wire || driven.count(target))
+				log_error("Alias record for %s[%d] would connect %s to %s, which is already driven.\n",
+						wire, offset, log_signal(source), log_signal(target));
+			module->connect(target, source);
+			sigmap.add(target, source);
+			if (!mapped_source.wire || driven.count(mapped_source))
+				driven.insert(sigmap(target));
+			alias_bits++;
+		}
 	}
 
 	log("ABC RESULTS:           input signals: %8d\n", in_wires);
