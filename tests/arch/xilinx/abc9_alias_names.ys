@@ -1,0 +1,59 @@
+read_verilog <<EOT
+module blk(input wire clk_in, input wire d, input wire a, input wire b,
+           input wire [3:0] x, input wire [3:0] y,
+           output wire o_sys_clk, output wire q, output wire o_and, output wire o_s,
+           output wire [3:0] o_sum, output wire [1:0] o_k);
+    wire sys_clk;
+    BUFG u_bufg (.I(clk_in), .O(sys_clk));
+    reg r = 1'b0;
+    always @(posedge sys_clk) r <= d;
+    assign q = r;
+    assign o_sys_clk = sys_clk;
+    wire andab = a & b;
+    assign o_and = andab;
+    reg s = 1'b0;
+    always @(posedge sys_clk) s <= andab;
+    assign o_s = s;
+    wire [3:0] sum = x + y;
+    reg [3:0] sumq = 4'b0000;
+    always @(posedge sys_clk) sumq <= sum;
+    assign o_sum = sumq;
+    wire [1:0] kk = 2'b10;
+    assign o_k = kk;
+endmodule
+
+module top(input wire clk_i, input wire d, input wire a, input wire b,
+           input wire [3:0] x, input wire [3:0] y,
+           output wire q, output wire q2, output wire q3, output wire q4,
+           output wire [3:0] q5, output wire [1:0] q6);
+    wire ddr_sys_clk, and_out;
+    blk u_ddr3 (.clk_in(clk_i), .d(d), .a(a), .b(b),
+                .x(x), .y(y),
+                .o_sys_clk(ddr_sys_clk), .q(q), .o_and(and_out), .o_s(q4),
+                .o_sum(q5), .o_k(q6));
+    reg r2 = 1'b0, r3 = 1'b1;
+    always @(posedge ddr_sys_clk) begin
+        r2 <= ~d;
+        r3 <= and_out;
+    end
+    assign q2 = r2;
+    assign q3 = r3;
+endmodule
+EOT
+synth_xilinx -flatten -abc9 -arch xc7 -top top
+check -assert
+
+select -assert-count 1 w:ddr_sys_clk
+select -assert-count 1 w:u_ddr3.o_sys_clk
+select -assert-count 1 w:u_ddr3.sys_clk
+select -assert-count 1 w:u_ddr3.r
+select -assert-count 1 w:u_ddr3.andab
+select -assert-count 1 w:u_ddr3.o_and
+select -assert-count 1 w:and_out
+select -assert-count 1 w:u_ddr3.sum
+select -assert-count 1 w:u_ddr3.kk
+
+select -assert-count 1 w:u_ddr3.sys_clk %a %ci:+BUFG[O] t:BUFG %i
+select -assert-count 2 w:u_ddr3.andab %a %co:+FDRE[D] t:FDRE %i
+select -assert-count 1 w:u_ddr3.r %a %ci:+FDRE[Q] t:FDRE %i
+select -assert-count 1 w:u_ddr3.sum %a %ci:+CARRY4[O] t:CARRY4 %i

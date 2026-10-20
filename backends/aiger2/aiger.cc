@@ -1275,6 +1275,8 @@ struct XAigerWriter : AigerWriter {
 	pool<Cell *> keep_cells;
 	std::ofstream map_file;
 	dict<SigBit, SigBit> named_alias; // map from anonymous wire to named wire
+	dict<SigBit, std::tuple<Cell *, IdString, int>> alias_box_pins;
+	dict<SigBit, std::tuple<Cell *, IdString, int>> alias_box_outputs;
 
 	void index_named_aliases()
 	{
@@ -1649,11 +1651,113 @@ struct XAigerWriter : AigerWriter {
 		pos.push_back(std::make_pair(SigBit(w, i), HierCursor{}));
 	}
 
+	SigBit alias_source(SigBit bit)
+	{
+		for (int n = 0; n < GetSize(top->cells()) && bit.wire && bit.wire->known_driver() &&
+				bit.wire->driverCell()->type == ID($buf); n++)
+			bit = bit.wire->driverCell()->getPort(ID::A)[bit.offset];
+		return bit;
+	}
+
+	void index_alias_box_pins()
+	{
+		for (auto box : top_minfo->found_blackboxes) {
+			Module *def = design->module(box->type);
+			bool rebuilt = def && box->parameters.empty() && def->has_attribute(ID::abc9_box_id);
+			for (auto &conn : box->connections()) {
+				RTLIL::PortDir dir = box->port_dir(conn.first);
+				if (rebuilt && opaque_box_output(dir) && !opaque_box_input(dir)) {
+					for (int i = 0; i < GetSize(conn.second); i++)
+						if (conn.second[i].wire)
+							alias_box_outputs.emplace(conn.second[i],
+									std::make_tuple(box, conn.first, i));
+					continue;
+				}
+				if (!opaque_box_input(dir))
+					continue;
+				for (int i = 0; i < GetSize(conn.second); i++)
+					if (conn.second[i].wire)
+						alias_box_pins.emplace(alias_source(conn.second[i]),
+								std::make_tuple(box, conn.first, i));
+			}
+		}
+	}
+
+	void retain_public_aliases()
+	{
+		dict<SigBit, SigBit> survivor;
+		for (auto wire : top->wires()) {
+			if (!wire->port_input && !wire->port_output && !keep_wires.count(wire))
+				continue;
+			bool kept_buf = !wire->port_input && !wire->port_output && wire->known_driver() &&
+					wire->driverCell()->type == ID($buf) && keep_cells.count(wire->driverCell());
+			for (int i = 0; i < GetSize(wire); i++) {
+				SigBit src = alias_source(SigBit(wire, i));
+				if (kept_buf && (!src.wire || !(src.wire->port_input || keep_wires.count(src.wire))))
+					continue;
+				survivor.emplace(src, SigBit(wire, i));
+			}
+		}
+
+		std::vector<Wire *> retained;
+		for (auto wire : top->wires()) {
+			if (!wire->name.isPublic() || wire->port_input || wire->port_output)
+				continue;
+			bool kept = keep_wires.count(wire);
+			bool any = false;
+			for (int i = 0; i < GetSize(wire); i++) {
+				SigBit src = alias_source(SigBit(wire, i));
+				auto o = alias_box_outputs.find(src);
+				if (o != alias_box_outputs.end()) {
+					auto &[box, port, offset] = o->second;
+					map_file << "aliaspin " << offset << " " << wire->start_offset + i
+							<< " " << wire->name.c_str() << " " << box->name.c_str()
+							<< " " << port.c_str() << "\n";
+					any = true;
+					continue;
+				}
+				if (kept)
+					continue;
+				if (!src.wire) {
+					if (src.data == State::S0 || src.data == State::S1) {
+						map_file << "aliasconst " << (src.data == State::S1 ? 1 : 0) << " "
+								<< wire->start_offset + i << " " << wire->name.c_str() << "\n";
+						any = true;
+					}
+					continue;
+				}
+				auto s = survivor.find(src);
+				if (s != survivor.end() && s->second.wire != wire) {
+					map_file << "aliaswire " << s->second.wire->start_offset + s->second.offset
+							<< " " << wire->start_offset + i << " " << wire->name.c_str()
+							<< " " << s->second.wire->name.c_str() << "\n";
+					any = true;
+					continue;
+				}
+				auto p = alias_box_pins.find(src);
+				if (p != alias_box_pins.end()) {
+					auto &[box, port, offset] = p->second;
+					map_file << "aliaspin " << offset << " " << wire->start_offset + i
+							<< " " << wire->name.c_str() << " " << box->name.c_str()
+							<< " " << port.c_str() << "\n";
+					any = true;
+				}
+			}
+			if (any && !kept)
+				retained.push_back(wire);
+		}
+		for (auto wire : retained)
+			keep_wires.insert(wire);
+	}
+
 	void write(std::ostream *f) {
 		reset_counters();
 
 		if (map_file.is_open())
 			index_named_aliases();
+
+		if (mapping_prep && map_file.is_open())
+			index_alias_box_pins();
 
 		for (auto w : top->wires())
 			if (w->port_input && !w->port_output)
@@ -1749,6 +1853,8 @@ struct XAigerWriter : AigerWriter {
 		f->seekp(0, std::ios::end);
 
 		if (mapping_prep) {
+			if (map_file.is_open())
+				retain_public_aliases();
 			pool<Wire *> to_remove;
 			for (auto wire : top->wires())
 				if (!wire->port_input && !wire->port_output && !keep_wires.count(wire))
