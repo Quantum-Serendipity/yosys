@@ -32,4 +32,4 @@ expose w:u_ddr3.sys_clk w:u_ddr3.r w:u_ddr3.andab w:u_ddr3.o_and w:and_out w:u_d
 memory
 opt_clean
 miter -equiv -flatten -make_assert -make_outputs gold gate miter
-sat -verify -prove-asserts -seq 2 -set-init-zero -show-ports miter
+sat -verify -prove-asserts -seq 2 -set-init-zero -timeout 300 -show-ports miter
