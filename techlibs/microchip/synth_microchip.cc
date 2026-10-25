@@ -27,6 +27,19 @@ PRIVATE_NAMESPACE_BEGIN
 struct SynthMicrochipPass : public ScriptPass {
 	SynthMicrochipPass() : ScriptPass("synth_microchip", "synthesis for Microchip FPGAs") {}
 
+	void on_register() override
+	{
+		target_register.emplace("microchip", Target{
+			"Microchip",
+			{
+				{"polarfire", {
+					"PolarFire",
+					{"+/microchip/cells_sim.v"}
+				}}
+			}
+		});
+	}
+
 	void help() override
 	{
 		//   |---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|
@@ -409,7 +422,7 @@ struct SynthMicrochipPass : public ScriptPass {
 			// Needs to be done before logic optimization, so that inverters (inserted
 			// 			here because of negative-polarity output enable) are handled.
 			if (help_mode || !noiopad) {
-				run("iopadmap -bits -inpad INBUF Y:PAD -outpad OUTBUF D:PAD -toutpad TRIBUFF E:D:PAD -tinoutpad BIBUF E:Y:D:PAD",
+				run("iopadmap -bits -inpad INBUF Y:PAD -outpad OUTBUF D:PAD -toutpad TRIBUFF E:D:PAD -tinoutpad BIBUF E:Y:D:PAD A:top",
 				    "(unless -noiobs)");
 			}
 
