@@ -35,11 +35,17 @@ include(UseHomebrew)
 # see https://github.com/YosysHQ/yosys/pull/5936#issuecomment-4637319568
 set(CMAKE_CXX_SCAN_FOR_MODULES NO)
 
+# Cache current yosys cmake root path
+set(YOSYS_CMAKE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}" CACHE INTERNAL "Save source path")
+set(YOSYS_CMAKE_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}" CACHE INTERNAL "Save binary path")
+
 # Build options.
 set(YOSYS_COMPILER_LAUNCHER "" CACHE STRING "Compiler launcher (ccache, sccache)")
+option(YOSYS_ENABLE_UNIT_TESTS "Enable unit tests" ON)
 option(YOSYS_ENABLE_COVERAGE "Enable code coverage" OFF)
 option(YOSYS_ENABLE_PROFILING "Enable instruction profiling" OFF)
 option(YOSYS_ENABLE_FUNCTIONAL_TESTS "Enable running functional tests" OFF)
+option(YOSYS_ENABLE_TWINE_PROVENANCE "Twine provenance for debugging. Worsens performance" OFF)
 
 set(YOSYS_PROGRAM_PREFIX "" CACHE STRING "Name prefix for programs, libraries, and data")
 set(YOSYS_COMPONENTS "everything" CACHE STRING "List of components to build (use pass names)")
@@ -56,6 +62,8 @@ option(YOSYS_WITHOUT_EDITLINE "Disable editline integration" OFF)
 option(YOSYS_WITHOUT_SLANG "Disable Slang integration" OFF)
 option(YOSYS_WITHOUT_TCL "Disable Tcl integration" OFF)
 option(YOSYS_WITH_PYTHON "Enable Python integration" OFF)
+
+option(YOSYS_USE_BUNDLED_LIBS "Use bundled third-party libraries" OFF)
 
 set(YOSYS_VERIFIC_DIR "" CACHE FILEPATH "Path to the Verific source code (empty to disable)")
 set(YOSYS_VERIFIC_COMPONENTS "" CACHE STRING
@@ -91,17 +99,21 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 check_pie_supported() # opportunistically enable PIE
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-	set(CMAKE_CXX_FLAGS_DEBUG "-Og -ggdb")
-	set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-	set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -ggdb")
-	set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os")
-	set(CMAKE_CXX_FLAGS_SANITIZE "-O1 -fno-omit-frame-pointer -fno-optimize-sibling-calls")
+	if (NOT CMAKE_PRESET)
+		set(CMAKE_CXX_FLAGS_DEBUG "-Og -ggdb")
+		set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+		set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -ggdb")
+		set(CMAKE_CXX_FLAGS_MINSIZEREL"-Os")
+		set(CMAKE_CXX_FLAGS_SANITIZE "-O1 -fno-omit-frame-pointer -fno-optimize-sibling-calls")
+	endif()
 	if ("${SANITIZE}" MATCHES "memory")
-		set(CMAKE_CXX_FLAGS_SANITIZE "${CMAKE_CXX_FLAGS_SANITIZE} -fsanitize-memory-track-origins")
+		add_compile_options(
+			"$<$<AND:$<NOT:$<BOOL:$<TARGET_PROPERTY:YOSYS_IS_ABC>>>,$<CONFIG:Sanitize>>:-fsanitize-memory-track-origins>"
+		)
 	endif()
 	set(no_abc_options
 		"$<$<AND:$<NOT:$<BOOL:$<TARGET_PROPERTY:YOSYS_IS_ABC>>>,$<CONFIG:Sanitize>>:-fsanitize=${SANITIZE}>"
-		"$<$<NOT:$<BOOL:$<TARGET_PROPERTY:YOSYS_IS_ABC>>>:-Wall;-Wextra;-Werror=unused>"
+		"$<$<NOT:$<BOOL:$<TARGET_PROPERTY:YOSYS_IS_ABC>>>:-Wall;-Wextra;-Werror=unused-variable;-Werror=unused-parameter;-Werror=unused-function>"
 	)
 	add_compile_options("${no_abc_options}")
 	add_link_options("${no_abc_options}")
@@ -126,7 +138,7 @@ if (YOSYS_ENABLE_COVERAGE)
 	if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
 		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --coverage")
 	elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fprofile-instr-generate -fcoverage-mapping")
+		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fprofile-instr-generate -fcoverage-mapping -fno-omit-frame-pointer -fno-optimize-sibling-calls -fno-inline -fno-inline-small-functions -fno-default-inline")
 	else()
 		message(FATAL_ERROR "Code coverage is not supported on ${CMAKE_CXX_COMPILER_ID} compiler")
 	endif()
@@ -169,7 +181,7 @@ if (MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSIO
 endif()
 
 # Required dependencies.
-if (APPLE)
+if (APPLE AND (NOT DEFINED YOSYS_ENABLE_HOMEBREW OR YOSYS_ENABLE_HOMEBREW))
 	# In practice, we can't expect paths to Homebrew packages to be configured.
 	use_homebrew()
 endif()
@@ -316,6 +328,7 @@ condition(YOSYS_ENABLE_SLANG NOT YOSYS_WITHOUT_SLANG)
 add_feature_info(have_glob YOSYS_ENABLE_GLOB "Glob expansion in filenames")
 add_feature_info(have_spawn YOSYS_ENABLE_SPAWN "Passes that invoke external tools")
 add_feature_info(have_threads YOSYS_ENABLE_THREADS "Multithreaded netlist operations")
+add_feature_info(twine_provenance YOSYS_ENABLE_TWINE_PROVENANCE "Twine provenance for debugging. Worsens performance")
 add_feature_info(have_plugins YOSYS_ENABLE_PLUGINS "Dynamically loadable binary plugins")
 add_feature_info(with_abc YOSYS_ENABLE_ABC "Production-quality logic synthesis flow")
 add_feature_info(with_zlib YOSYS_ENABLE_ZLIB "Transparent Gzip decompression and FST file format support")
@@ -374,8 +387,8 @@ target_compile_definitions(yosys_common INTERFACE
 	$<$<CONFIG:Debug,RelWithDebInfo>:DEBUG>
 )
 target_include_directories(yosys_common INTERFACE
-	${CMAKE_SOURCE_DIR}
-	${CMAKE_BINARY_DIR}
+	${YOSYS_CMAKE_SOURCE_DIR}
+	${YOSYS_CMAKE_BINARY_DIR}
 )
 if (SANITIZE)
 	target_compile_options(yosys_common INTERFACE
@@ -424,18 +437,16 @@ if (NOT YOSYS_BUILD_PYTHON_ONLY)
 	yosys_link_components(yosys PRIVATE ${driver_components})
 	set_property(TARGET yosys PROPERTY ENABLE_EXPORTS ON)
 	if (MINGW)
-		target_link_options(yosys PRIVATE LINKER:--export-all-symbols)
+		target_link_options(yosys PRIVATE -municode LINKER:--export-all-symbols)
 		set_target_properties(yosys PROPERTIES
 			# Final name: `yosys.exe.a` (linked to explicitly)
 			IMPORT_PREFIX ""
 			IMPORT_SUFFIX ".exe.a"
 		)
 		if (YOSYS_INSTALL_DRIVER)
-			install(FILES ${CMAKE_BINARY_DIR}/yosys.exe.a DESTINATION ${YOSYS_INSTALL_LIBDIR})
+			install(FILES ${YOSYS_CMAKE_BINARY_DIR}/yosys.exe.a DESTINATION ${YOSYS_INSTALL_LIBDIR})
 		endif()
 	endif()
-
-	target_compile_options(yosys PRIVATE -fsanitize=undefined)
 endif()
 
 # Yosys components as a library.
@@ -462,6 +473,24 @@ endif()
 # Yosys data files (mainly headers and technological libraries).
 if (YOSYS_INSTALL_DRIVER OR YOSYS_INSTALL_LIBRARY)
 	yosys_install_component_data(${library_components} DESTINATION ${YOSYS_INSTALL_DATADIR})
+endif()
+
+# Build SN binary part of ABC
+if (NOT MSVC AND NOT YOSYS_WITHOUT_SLANG)
+	block()
+		set(ABC_SOURCE_DIR "${YOSYS_CMAKE_SOURCE_DIR}/abc")
+		add_subdirectory(abc/tools/sn EXCLUDE_FROM_ALL)
+
+		set_target_properties(sn_slang_lib PROPERTIES YOSYS_IS_ABC ON)
+		set_target_properties(sn PROPERTIES YOSYS_IS_ABC ON)
+		if(SANITIZE)
+			target_link_options(sn PRIVATE -fsanitize=${SANITIZE})
+		endif()
+
+		set_target_properties(sn PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${YOSYS_CMAKE_BINARY_DIR}")
+		install(TARGETS sn DESTINATION ${CMAKE_INSTALL_BINDIR})
+		add_dependencies(yosys-abc sn)
+	endblock()
 endif()
 
 # Python binary extension (for using Yosys as a Python library).
@@ -495,6 +524,11 @@ if (YOSYS_ENABLE_PYTHON)
 				DESTINATION ${pyosys_install_dir}
 			)
 		endif()
+		if (NOT MSVC AND NOT YOSYS_WITHOUT_SLANG)
+			install(TARGETS sn
+				DESTINATION ${pyosys_install_dir}
+			)
+		endif()
 		yosys_install_component_data(${library_components} DESTINATION ${pyosys_install_dir}/share)
 	endif()
 endif()
@@ -509,14 +543,14 @@ endif()
 # (The use of `${makefile_vars}` in `add_custom_{target,command}()` adds dependencies for
 # all of the targets specified via `$<TARGET_FILE:tgt>`.)
 set(makefile_vars
-	BUILD_DIR=${CMAKE_BINARY_DIR}
+	BUILD_DIR=${YOSYS_CMAKE_BINARY_DIR}
 	PROGRAM_PREFIX=${YOSYS_PROGRAM_PREFIX}
 	ABC=$<IF:$<TARGET_EXISTS:yosys-abc>,$<TARGET_FILE:yosys-abc>,${YOSYS_ABC_EXECUTABLE}>
 	YOSYS=$<TARGET_FILE:yosys>
-	YOSYS_CONFIG=${CMAKE_BINARY_DIR}/${YOSYS_PROGRAM_PREFIX}yosys-config
+	YOSYS_CONFIG=${YOSYS_CMAKE_BINARY_DIR}/${YOSYS_PROGRAM_PREFIX}yosys-config
 	YOSYS_FILTERLIB=$<$<TARGET_EXISTS:yosys-filterlib>:$<TARGET_FILE:yosys-filterlib>>
-	YOSYS_SMTBMC=${CMAKE_BINARY_DIR}/${YOSYS_PROGRAM_PREFIX}yosys-smtbmc
-	YOSYS_WITNESS=${CMAKE_BINARY_DIR}/${YOSYS_PROGRAM_PREFIX}yosys-witness
+	YOSYS_SMTBMC=${YOSYS_CMAKE_BINARY_DIR}/${YOSYS_PROGRAM_PREFIX}yosys-smtbmc
+	YOSYS_WITNESS=${YOSYS_CMAKE_BINARY_DIR}/${YOSYS_PROGRAM_PREFIX}yosys-witness
 )
 set(makefile_depends
 	# abc is implied via $<TARGET_FILE>
@@ -526,19 +560,20 @@ set(makefile_depends
 	$<$<TARGET_EXISTS:yosys-witness>:yosys-witness>
 )
 
-if (NOT YOSYS_BUILD_PYTHON_ONLY)
+if (NOT YOSYS_BUILD_PYTHON_ONLY AND YOSYS_ENABLE_UNIT_TESTS)
 	# Tests.
 	add_subdirectory(tests/unit)
 
 	add_custom_target(test-unit
 		COMMAND ${CMAKE_CTEST_COMMAND} --test-dir tests/unit --output-on-failure
-		WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+		WORKING_DIRECTORY ${YOSYS_CMAKE_BINARY_DIR}
+		DEPENDS $<$<TARGET_EXISTS:yosys-gtest-all>:yosys-gtest-all>
 	)
 
 	add_custom_target(test-vanilla
 		COMMAND make vanilla-test ${makefile_vars}
 			ENABLE_FUNCTIONAL_TESTS=$<IF:$<BOOL:${YOSYS_ENABLE_FUNCTIONAL_TESTS}>,1,0>
-		WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests
+		WORKING_DIRECTORY ${YOSYS_CMAKE_SOURCE_DIR}/tests
 		DEPENDS ${makefile_depends}
 		USES_TERMINAL
 		JOB_SERVER_AWARE TRUE
@@ -547,7 +582,7 @@ if (NOT YOSYS_BUILD_PYTHON_ONLY)
 	add_custom_target(test-functional
 		COMMAND make functional ${makefile_vars}
 			ENABLE_FUNCTIONAL_TESTS=$<IF:$<BOOL:${YOSYS_ENABLE_FUNCTIONAL_TESTS}>,1,0>
-		WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests
+		WORKING_DIRECTORY ${YOSYS_CMAKE_SOURCE_DIR}/tests
 		DEPENDS ${makefile_depends}
 		USES_TERMINAL
 		JOB_SERVER_AWARE TRUE
@@ -560,20 +595,20 @@ if (NOT YOSYS_BUILD_PYTHON_ONLY)
 	# Docs.
 	add_custom_target(docs-prepare
 		COMMAND make gen ${makefile_vars}
-		WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/docs
+		WORKING_DIRECTORY ${YOSYS_CMAKE_SOURCE_DIR}/docs
 		DEPENDS ${makefile_depends}
 		JOB_SERVER_AWARE TRUE
 	)
 	foreach (format html latexpdf)
 		add_custom_target(docs-${format}
 			COMMAND make ${format}
-			WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/docs
+			WORKING_DIRECTORY ${YOSYS_CMAKE_SOURCE_DIR}/docs
 			DEPENDS docs-prepare
 		)
 	endforeach()
 	add_custom_target(test-docs
 		COMMAND make test ${makefile_vars}
-		WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/docs
+		WORKING_DIRECTORY ${YOSYS_CMAKE_SOURCE_DIR}/docs
 		DEPENDS ${makefile_depends}
 		JOB_SERVER_AWARE TRUE
 	)
@@ -596,9 +631,9 @@ math(EXPR YOSYS_VERSION_MINOR_next "${YOSYS_VERSION_MINOR} + 1")
 add_custom_target(increment-minor-version
 	COMMAND ${CMAKE_COMMAND} -E echo
 		"set(YOSYS_VERSION_MAJOR ${YOSYS_VERSION_MAJOR})"
-		> ${CMAKE_SOURCE_DIR}/cmake/YosysVersionData.cmake
+		> ${YOSYS_CMAKE_SOURCE_DIR}/cmake/YosysVersionData.cmake
 	COMMAND ${CMAKE_COMMAND} -E echo
 		"set(YOSYS_VERSION_MINOR ${YOSYS_VERSION_MINOR_next})"
-		>> ${CMAKE_SOURCE_DIR}/cmake/YosysVersionData.cmake
+		>> ${YOSYS_CMAKE_SOURCE_DIR}/cmake/YosysVersionData.cmake
 	VERBATIM
 )

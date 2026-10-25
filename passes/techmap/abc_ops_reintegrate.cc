@@ -27,26 +27,256 @@
 USING_YOSYS_NAMESPACE
 PRIVATE_NAMESPACE_BEGIN
 
-int map_autoidx;
-
-inline std::string remap_name(RTLIL::IdString abc9_name)
+struct Remapper
 {
-	return stringf("$abc$%d$%s", map_autoidx, abc9_name.c_str()+1);
+	RTLIL::Design *design;
+	int map_autoidx;
+
+	std::string name(const std::string &abc9_name) const
+	{
+		return stringf("$abc$%d$%s", map_autoidx, abc9_name.c_str() + 1);
+	}
+
+	IdString operator()(IdString n) const
+	{
+		return design->twines().add(name(design->twines().str(n)));
+	}
+};
+
+inline IdString ref_from_token(RTLIL::Design *design, const std::string &tok)
+{
+	IdString ref = design->twines().ref_from_token(tok);
+	if (ref == IdString::Null)
+		log_error("Bad map file: '%s' is not a live name reference of this yosys run.\n", tok.c_str());
+	return ref;
 }
 
-void reintegrate(RTLIL::Module *module, bool dff_mode)
+inline IdString indexed_name(RTLIL::Design *design, IdString base, int index)
+{
+	return design->twines().add(TwineSpec::Suffix{base, stringf("[%d]", index)});
+}
+
+struct PseudoPo {
+	RTLIL::IdString cell;
+	RTLIL::IdString port;
+	int offset;
+};
+
+struct KeptWire {
+	RTLIL::IdString wire;
+	int offset;
+};
+
+void unmapped_error(RTLIL::Cell *cell)
+{
+	log_error("ABC returned unmapped node '%s'. Check your abc script.\n", cell);
+}
+
+void reintegrate(RTLIL::Module *module, bool dff_mode, bool stdcell_mode, std::string map_filename)
 {
 	auto design = module->design;
 	log_assert(design);
 
-	map_autoidx = autoidx++;
+	Remapper remap{design, autoidx++};
 
 	RTLIL::Module *mapped_mod = design->module(stringf("%s$abc9", module->name));
 	if (mapped_mod == NULL)
 		log_error("ABC output file does not contain a module `%s$abc'.\n", module);
 
+	int input_count = design->scratchpad_get_int("read_aiger.inputs", 0);
+	int output_count = design->scratchpad_get_int("read_aiger.outputs", 0);
+	int co_count = design->scratchpad_get_int("read_aiger.co_count", 0);
+
+	dict<RTLIL::IdString, std::pair<int,int>> wideports_cache;
+	dict<RTLIL::IdString, PseudoPo> pseudopos;
+	dict<RTLIL::IdString, KeptWire> keptwires;
+
+	if (!map_filename.empty()) {
+		std::ifstream mf(map_filename);
+		std::string type, symbol;
+		int variable, index;
+
+		while (mf >> type >> variable >> index >> symbol) {
+			IdString escaped_ref = ref_from_token(design, symbol);
+			if (type == "input") {
+				log_assert(variable < input_count);
+				RTLIL::Wire* wire = mapped_mod->wire(stringf("$aiger$i%d", variable + 1));
+				log_assert(wire);
+				log_assert(wire->port_input);
+				std::string message = stringf("Renaming input %s", wire);
+
+				RTLIL::Wire *existing = nullptr;
+				IdString name_ref;
+				if (index == 0) {
+					name_ref = escaped_ref;
+					// Cope with the fact that a CI might be identical
+					// to a PI (necessary due to ABC); in those cases
+					// simply connect the latter to the former
+					existing = mapped_mod->wire(name_ref);
+					if (!existing)
+						mapped_mod->rename(wire, name_ref);
+					else {
+						wire->port_input = false;
+						mapped_mod->connect(wire, existing);
+					}
+					log_debug("%s -> %s\n", message, design->twines().unescaped_str(escaped_ref));
+				}
+				else {
+					name_ref = indexed_name(design, escaped_ref, index);
+					existing = mapped_mod->wire(name_ref);
+					if (!existing)
+						mapped_mod->rename(wire, name_ref);
+					else {
+						mapped_mod->connect(wire, existing);
+						wire->port_input = false;
+					}
+					log_debug("%s -> %s\n", message, design->twines().unescaped_str(name_ref));
+				}
+
+				if (!existing) {
+					auto r = wideports_cache.insert(escaped_ref);
+					if (r.second) {
+						r.first->second.first = index;
+						r.first->second.second = index;
+					}
+					else {
+						r.first->second.first = std::min(r.first->second.first, index);
+						r.first->second.second = std::max(r.first->second.second, index);
+					}
+				}
+			}
+			else if (type == "output") {
+				log_assert(variable + co_count < output_count);
+				RTLIL::Wire* wire = mapped_mod->wire(stringf("$aiger$o%d", variable + co_count));
+				log_assert(wire);
+				log_assert(wire->port_output);
+				std::string message = stringf("Renaming output %s", wire);
+
+				RTLIL::Wire *existing;
+				IdString name_ref;
+				if (index == 0) {
+					name_ref = escaped_ref;
+					// Cope with the fact that a CO might be identical
+					// to a PO (necessary due to ABC); in those cases
+					// simply connect the latter to the former
+					existing = mapped_mod->wire(name_ref);
+					if (!existing)
+						mapped_mod->rename(wire, name_ref);
+					else {
+						wire->port_output = false;
+						existing->port_output = true;
+						mapped_mod->connect(wire, existing);
+						wire = existing;
+					}
+					log_debug("%s -> %s\n", message, design->twines().unescaped_str(escaped_ref));
+				}
+				else {
+					name_ref = indexed_name(design, escaped_ref, index);
+					existing = mapped_mod->wire(name_ref);
+					if (!existing)
+						mapped_mod->rename(wire, name_ref);
+					else {
+						wire->port_output = false;
+						existing->port_output = true;
+						mapped_mod->connect(wire, existing);
+					}
+					log_debug("%s -> %s\n", message, design->twines().unescaped_str(name_ref));
+				}
+
+				if (!existing) {
+					auto r = wideports_cache.insert(escaped_ref);
+					if (r.second) {
+						r.first->second.first = index;
+						r.first->second.second = index;
+					}
+					else {
+						r.first->second.first = std::min(r.first->second.first, index);
+						r.first->second.second = std::max(r.first->second.second, index);
+					}
+				}
+			}
+			else if (type == "pseudopo") {
+				std::string port;
+				mf >> port;
+				IdString escaped_p = ref_from_token(design, port);
+
+				log_assert(variable + co_count < output_count);
+				IdString wire_name = design->twines().find(stringf("$aiger$o%d", variable + co_count));
+				RTLIL::Wire* wire = mapped_mod->wire(wire_name);
+				log_assert(wire);
+				log_assert(wire->port_output);
+
+				pseudopos.insert({wire_name, PseudoPo{escaped_ref, escaped_p, index}});
+				log_debug("Mapping pseudo output %s -> %s.%s[%d]\n", wire, design->twines().unescaped_str(escaped_ref), design->twines().unescaped_str(escaped_p), index);
+			}
+			else if (type == "keepwire") {
+				log_assert(variable + co_count < output_count);
+				RTLIL::IdString wire_name = design->twines().add(stringf("$aiger$o%d", variable + co_count));
+				RTLIL::Wire* wire = mapped_mod->wire(wire_name);
+				log_assert(wire);
+				log_assert(wire->port_output);
+
+				keptwires.insert({wire_name, KeptWire{escaped_ref, index}});
+				log_debug("Mapping kept wire %s -> %s[%d]\n", wire, PooledName(design, escaped_ref), index);
+			}
+			else if (type == "box") {
+				RTLIL::Cell* cell = mapped_mod->cell(stringf("$box%d", variable));
+				if (!cell)
+					log_debug("Box %d (%s) no longer exists.\n", variable, design->twines().unescaped_str(escaped_ref));
+				else
+					mapped_mod->rename(cell, escaped_ref);
+			}
+			else
+				log_error("Symbol type '%s' not recognised.\n", type);
+		}
+	}
+
+	for (auto &wp : wideports_cache) {
+		IdString name = wp.first;
+		int min = wp.second.first;
+		int max = wp.second.second;
+		if (min == 0 && max == 0)
+			continue;
+
+		RTLIL::Wire *wire = mapped_mod->wire(name);
+		if (wire)
+			mapped_mod->rename(wire, indexed_name(design, name, 0));
+
+		// Do not make ports with a mix of input/output into
+		// wide ports
+		bool port_input = false, port_output = false;
+		for (int i = min; i <= max; i++) {
+			IdString other_name = indexed_name(design, name, i);
+			RTLIL::Wire *other_wire = mapped_mod->wire(other_name);
+			if (other_wire) {
+				port_input = port_input || other_wire->port_input;
+				port_output = port_output || other_wire->port_output;
+			}
+		}
+
+		wire = mapped_mod->addWire(name, max-min+1);
+		wire->start_offset = min;
+		wire->port_input = port_input;
+		wire->port_output = port_output;
+
+		for (int i = min; i <= max; i++) {
+			IdString other_name = indexed_name(design, name, i);
+			RTLIL::Wire *other_wire = mapped_mod->wire(other_name);
+			if (other_wire) {
+				other_wire->port_input = false;
+				other_wire->port_output = false;
+				if (wire->port_input)
+					mapped_mod->connect(other_wire, SigSpec(wire, i-min));
+				else
+					mapped_mod->connect(SigSpec(wire, i-min), other_wire);
+			}
+		}
+	}
+
+	mapped_mod->fixup_ports();
+
 	for (auto w : mapped_mod->wires()) {
-		auto nw = module->addWire(remap_name(w->name), GetSize(w));
+		auto nw = module->addWire(remap(w->name), GetSize(w));
 		nw->start_offset = w->start_offset;
 		// Remove all (* init *) since they only exist on $_DFF_[NP]_
 		w->attributes.erase(ID::init);
@@ -99,7 +329,7 @@ void reintegrate(RTLIL::Module *module, bool dff_mode)
 		}
 	}
 
-	std::vector<Cell*> boxes;
+	pool<Cell*> boxes;
 	for (auto cell : module->cells().to_vector()) {
 		if (cell->has_keep_attr())
 			continue;
@@ -119,11 +349,11 @@ void reintegrate(RTLIL::Module *module, bool dff_mode)
 		else if (cell->type.in(ID($_AND_), ID($_NOT_)))
 			module->remove(cell);
 		else if (cell->attributes.erase(ID::abc9_box_seq))
-			boxes.emplace_back(cell);
+			boxes.insert(cell);
 	}
 
 	dict<SigBit, pool<IdString>> bit_drivers, bit_users;
-	TopoSort<IdString, RTLIL::sort_by_id_str> toposort;
+	TopoSort<IdString, RTLIL::sort_by_id_str> toposort(RTLIL::sort_by_id_str(module->twines()));
 	dict<RTLIL::Cell*,RTLIL::Cell*> not2drivers;
 	dict<SigBit, std::vector<RTLIL::Cell*>> bit2sinks;
 
@@ -136,8 +366,8 @@ void reintegrate(RTLIL::Module *module, bool dff_mode)
 			SigBit D = mapped_cell->getPort(ID::D);
 			SigBit Q = mapped_cell->getPort(ID::Q);
 			if (D.wire)
-				D.wire = module->wires_.at(remap_name(D.wire->name));
-			Q.wire = module->wires_.at(remap_name(Q.wire->name));
+				D.wire = module->wire(remap(D.wire->name));
+			Q.wire = module->wire(remap(Q.wire->name));
 			module->connect(Q, D);
 			continue;
 		}
@@ -148,6 +378,8 @@ void reintegrate(RTLIL::Module *module, bool dff_mode)
 		if (mapped_cell->type == ID($_NOT_)) {
 			RTLIL::SigBit a_bit = mapped_cell->getPort(ID::A);
 			RTLIL::SigBit y_bit = mapped_cell->getPort(ID::Y);
+			if (stdcell_mode && a_bit != State::S0)
+				unmapped_error(mapped_cell);
 			bit_users[a_bit].insert(mapped_cell->name);
 			// Ignore inouts for topo ordering
 			if (y_bit.wire && !(y_bit.wire->port_input && y_bit.wire->port_output))
@@ -155,7 +387,7 @@ void reintegrate(RTLIL::Module *module, bool dff_mode)
 
 			if (!a_bit.wire) {
 				mapped_cell->setPort(ID::Y, module->addWire(NEW_ID));
-				RTLIL::Wire *wire = module->wire(remap_name(y_bit.wire->name));
+				RTLIL::Wire *wire = module->wire(remap(y_bit.wire->name));
 				log_assert(wire);
 				module->connect(RTLIL::SigBit(wire, y_bit.offset), State::S1);
 			}
@@ -167,20 +399,21 @@ void reintegrate(RTLIL::Module *module, bool dff_mode)
 					// find the driver LUT and clone that to guarantee that we won't
 					// increase the max logic depth
 					// (TODO: Optimise by not cloning unless will increase depth)
-					RTLIL::IdString driver_name;
+					std::string driver_name;
 					if (GetSize(a_bit.wire) == 1)
 						driver_name = stringf("$lut%s", a_bit.wire->name);
 					else
 						driver_name = stringf("$lut%s[%d]", a_bit.wire->name, a_bit.offset);
-					driver_lut = mapped_mod->cell(driver_name);
+					IdString driver_ref = design->twines().find(driver_name);
+					driver_lut = driver_ref.empty() ? nullptr : mapped_mod->cell(driver_ref);
 				}
 
 				if (!driver_lut) {
 					// If a driver couldn't be found (could be from PI or box CI)
 					// then implement using a LUT
-					RTLIL::Cell *cell = module->addLut(remap_name(stringf("$lut%s", mapped_cell->name)),
-							RTLIL::SigBit(module->wires_.at(remap_name(a_bit.wire->name)), a_bit.offset),
-							RTLIL::SigBit(module->wires_.at(remap_name(y_bit.wire->name)), y_bit.offset),
+					RTLIL::Cell *cell = module->addLut(remap.name(stringf("$lut%s", mapped_cell->name)),
+							RTLIL::SigBit(module->wire(remap(a_bit.wire->name)), a_bit.offset),
+							RTLIL::SigBit(module->wire(remap(y_bit.wire->name)), y_bit.offset),
 							RTLIL::Const::from_string("01"));
 					bit2sinks[cell->getPort(ID::A)].push_back(cell);
 					cell_stats[ID($lut)]++;
@@ -191,10 +424,13 @@ void reintegrate(RTLIL::Module *module, bool dff_mode)
 			continue;
 		}
 
-		if (mapped_cell->type == ID($lut)) {
-			RTLIL::Cell *cell = module->addCell(remap_name(mapped_cell->name), mapped_cell->type);
-			cell->parameters = mapped_cell->parameters;
-			cell->attributes = mapped_cell->attributes;
+		if (stdcell_mode && mapped_cell->type.in(ID($lut), ID($_AND_)))
+			unmapped_error(mapped_cell);
+
+		if (mapped_cell->type == ID($lut) || mapped_cell->get_bool_attribute(ID::abc9_cell)) {
+			RTLIL::Cell *cell = module->addCell(remap(mapped_cell->name), mapped_cell->type);
+			RTLIL::copy_attr_dict(cell->parameters, mapped_cell->parameters, mapped_mod->design, design);
+			RTLIL::copy_attr_dict(cell->attributes, mapped_cell->attributes, mapped_mod->design, design);
 
 			for (auto &mapped_conn : mapped_cell->connections()) {
 				RTLIL::SigSpec newsig;
@@ -203,7 +439,7 @@ void reintegrate(RTLIL::Module *module, bool dff_mode)
 						continue;
 					//log_assert(c.width == 1);
 					if (c.wire)
-						c.wire = module->wires_.at(remap_name(c.wire->name));
+						c.wire = module->wire(remap(c.wire->name));
 					newsig.append(c);
 				}
 				cell->setPort(mapped_conn.first, newsig);
@@ -230,9 +466,9 @@ void reintegrate(RTLIL::Module *module, bool dff_mode)
 				SigBit I = mapped_cell->getPort(ID(i));
 				SigBit O = mapped_cell->getPort(ID(o));
 				if (I.wire)
-					I.wire = module->wires_.at(remap_name(I.wire->name));
+					I.wire = module->wire(remap(I.wire->name));
 				log_assert(O.wire);
-				O.wire = module->wires_.at(remap_name(O.wire->name));
+				O.wire = module->wire(remap(O.wire->name));
 				module->connect(O, I);
 				continue;
 			}
@@ -242,10 +478,11 @@ void reintegrate(RTLIL::Module *module, bool dff_mode)
 			log_assert(mapped_cell->type == stringf("$__boxid%d", box_module->attributes.at(ID::abc9_box_id).as_int()));
 			mapped_cell->type = existing_cell->type;
 
-			RTLIL::Cell *cell = module->addCell(remap_name(mapped_cell->name), mapped_cell->type);
-			cell->parameters = existing_cell->parameters;
-			cell->attributes = existing_cell->attributes;
+			RTLIL::Cell *cell = module->addCell(remap(mapped_cell->name), mapped_cell->type);
+			RTLIL::copy_attr_dict(cell->parameters, existing_cell->parameters, existing_cell->module->design, design);
+			RTLIL::copy_attr_dict(cell->attributes, existing_cell->attributes, existing_cell->module->design, design);
 			module->swap_names(cell, existing_cell);
+			boxes.insert(existing_cell);
 
 			auto jt = mapped_cell->connections_.find(ID(i));
 			log_assert(jt != mapped_cell->connections_.end());
@@ -272,7 +509,7 @@ void reintegrate(RTLIL::Module *module, bool dff_mode)
 					old_q = existing_cell->getPort(port_name);
 				}
 				auto new_q = outputs[0];
-				new_q.wire = module->wires_.at(remap_name(new_q.wire->name));
+				new_q.wire = module->wire(remap(new_q.wire->name));
 				module->connect(old_q,  new_q);
 			}
 			else {
@@ -305,7 +542,7 @@ void reintegrate(RTLIL::Module *module, bool dff_mode)
 						continue;
 					//log_assert(c.width == 1);
 					if (c.wire)
-						c.wire = module->wires_.at(remap_name(c.wire->name));
+						c.wire = module->wire(remap(c.wire->name));
 					newsig.append(c);
 				}
 
@@ -328,22 +565,57 @@ void reintegrate(RTLIL::Module *module, bool dff_mode)
 		if (!conn.first.is_fully_const()) {
 			std::vector<RTLIL::SigChunk> chunks = conn.first.chunks();
 			for (auto &c : chunks)
-				c.wire = module->wires_.at(remap_name(c.wire->name));
+				c.wire = module->wire(remap(c.wire->name));
 			conn.first = std::move(chunks);
 		}
 		if (!conn.second.is_fully_const()) {
 			std::vector<RTLIL::SigChunk> chunks = conn.second.chunks();
 			for (auto &c : chunks)
 				if (c.wire)
-					c.wire = module->wires_.at(remap_name(c.wire->name));
+					c.wire = module->wire(remap(c.wire->name));
 			conn.second = std::move(chunks);
 		}
 		module->connect(conn);
 	}
 
 	for (auto &it : cell_stats)
-		log("ABC RESULTS:   %15s cells: %8d\n", it.first, it.second);
+		log("ABC RESULTS:   %15s cells: %8d\n", design->twines().str(it.first), it.second);
 	int in_wires = 0, out_wires = 0;
+
+	for (auto pseudopo : pseudopos) {
+		auto wire_name = pseudopo.first;
+		auto &target = pseudopo.second;
+
+		RTLIL::Wire *mapped_wire = mapped_mod->wire(wire_name);
+		log_assert(mapped_wire);
+		auto box = module->cell(target.cell);
+		log_assert(box);
+
+		// replace only the driven bit
+		RTLIL::Wire *remap_wire = module->wire(remap(wire_name));
+		RTLIL::SigSpec port = box->getPort(target.port);
+		log_assert(target.offset < GetSize(port));
+		port[target.offset] = remap_wire;
+		box->setPort(target.port, port);
+
+		mapped_wire->port_output = false;
+	}
+
+	// Drive the kept wires from the nets that replaced them
+	for (auto &[wire_name, kept] : keptwires) {
+		RTLIL::Wire *mapped_wire = mapped_mod->wire(wire_name);
+		log_assert(mapped_wire);
+		RTLIL::Wire *remap_wire = module->wire(remap(wire_name));
+		log_assert(remap_wire);
+
+		RTLIL::Wire *wire = module->wire(kept.wire);
+		log_assert(wire);
+		module->connect(SigBit(wire, kept.offset - wire->start_offset), remap_wire);
+
+		mapped_wire->port_output = false;
+	}
+
+	mapped_mod->fixup_ports();
 
 	// Stitch in mapped_mod's inputs/outputs into module
 	for (auto port : mapped_mod->ports) {
@@ -351,7 +623,7 @@ void reintegrate(RTLIL::Module *module, bool dff_mode)
 		RTLIL::Wire *wire = module->wire(port);
 		log_assert(wire);
 
-		RTLIL::Wire *remap_wire = module->wire(remap_name(port));
+		RTLIL::Wire *remap_wire = module->wire(remap(mapped_wire->name));
 		RTLIL::SigSpec signal(wire, remap_wire->start_offset-wire->start_offset, GetSize(remap_wire));
 		log_assert(GetSize(signal) >= GetSize(remap_wire));
 
@@ -402,8 +674,8 @@ void reintegrate(RTLIL::Module *module, bool dff_mode)
 		RTLIL::SigBit y_bit = not_cell->getPort(ID::Y);
 		RTLIL::Const driver_mask;
 
-		a_bit.wire = module->wires_.at(remap_name(a_bit.wire->name));
-		y_bit.wire = module->wires_.at(remap_name(y_bit.wire->name));
+		a_bit.wire = module->wire(remap(a_bit.wire->name));
+		y_bit.wire = module->wire(remap(y_bit.wire->name));
 
 		auto jt = bit2sinks.find(a_bit);
 		if (jt == bit2sinks.end())
@@ -452,7 +724,7 @@ clone_lut:
 				y_bit,
 				driver_mask);
 		for (auto &bit : cell->connections_.at(ID::A)) {
-			bit.wire = module->wires_.at(remap_name(bit.wire->name));
+			bit.wire = module->wire(remap(bit.wire->name));
 			bit2sinks[bit].push_back(cell);
 		}
 	}
@@ -475,18 +747,39 @@ struct AbcOpsReintegratePass : public Pass {
 		log("by first recovering ABC9 boxes, and then stitching in the remaining\n");
 		log("primary inputs and outputs.\n");
 		log("\n");
+		log("    -dff\n");
+		log("        consider flop cells (those instantiating modules marked with\n");
+		log("        (* abc9_flop *)) during -prep_{delays,xaiger,box}.\n");
+		log("\n");
+		log("    -map <filename>\n");
+		log("        read file with port and latch symbols\n");
+		log("\n");
+		log("    -stdcell\n");
+		log("        expect a result mapped to standard cells. AIG nodes and LUTs in the\n");
+		log("        result are an error.\n");
+		log("\n");
 	}
 	void execute(std::vector<std::string> args, RTLIL::Design *design) override
 	{
 		log_header(design, "Executing ABC_OPS_REINTEGRATE pass (reintegrate ABC mapped design into module).\n");
 
 		bool dff_mode = false;
+		bool stdcell_mode = false;
+		std::string map_filename;
 
 		size_t argidx;
 		for (argidx = 1; argidx < args.size(); argidx++) {
 			std::string arg = args[argidx];
 			if (arg == "-dff") {
 				dff_mode = true;
+				continue;
+			}
+			if (arg == "-stdcell") {
+				stdcell_mode = true;
+				continue;
+			}
+			if (map_filename.empty() && arg == "-map" && argidx+1 < args.size()) {
+				map_filename = args[++argidx];
 				continue;
 			}
 		}
@@ -501,7 +794,7 @@ struct AbcOpsReintegratePass : public Pass {
 			if (!design->selected_whole_module(mod))
 				log_error("Can't handle partially selected module %s!\n", mod);
 
-			reintegrate(mod, dff_mode);
+			reintegrate(mod, dff_mode, stdcell_mode, map_filename);
 		}
 	}
 } AbcOpsReintegratePass;

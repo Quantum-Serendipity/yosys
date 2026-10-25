@@ -14,13 +14,18 @@ function(target_safe_compile_options target scope)
 endfunction()
 
 function(_yosys_abc_extract_makefile result vardecl filename)
-	# Parse a Makefile fragment and extracts the first matching variable assignment into
+	# Parse a Makefile fragment and extract matching variable assignments into
 	# a list of values.
 	file(READ ${filename} contents)
 	set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${filename})
-	if ("${contents}" MATCHES "${vardecl}(\\\\\n|[ \t])*(([^\\\\\n]|\\\\\n)+)")
-		string(REGEX REPLACE "(\\\\\n|[ \t])+" ";" ${result} "${CMAKE_MATCH_2}")
-	endif()
+	set(${result})
+	while ("${contents}" MATCHES "${vardecl}(\\\\\n|[ \t])*(([^\\\\\n]|\\\\\n)+)")
+		set(sources "${CMAKE_MATCH_2}")
+		set(matched "${CMAKE_MATCH_0}")
+		string(REGEX REPLACE "(\\\\\n|[ \t])+" ";" sources "${sources}")
+		list(APPEND ${result} ${sources})
+		string(REPLACE "${matched}" "" contents "${contents}")
+	endwhile()
 	return (PROPAGATE ${result})
 endfunction()
 
@@ -32,11 +37,11 @@ function(yosys_abc_target arg_LIBNAME arg_EXENAME)
 	# This way, no assumptions about the environment are made, and Yosys can be compiled
 	# on Windows without MSYS as a result (while benefitting other platforms as well).
 	set(all_sources)
-	_yosys_abc_extract_makefile(module_files "MODULES :=" ${CMAKE_SOURCE_DIR}/abc/Makefile)
-	_yosys_abc_extract_makefile(module_files_cudd "MODULES \\+=" ${CMAKE_SOURCE_DIR}/abc/Makefile)
+	_yosys_abc_extract_makefile(module_files "MODULES :=" ${YOSYS_CMAKE_SOURCE_DIR}/abc/Makefile)
+	_yosys_abc_extract_makefile(module_files_cudd "MODULES \\+=" ${YOSYS_CMAKE_SOURCE_DIR}/abc/Makefile)
 	list(REMOVE_ITEM module_files "$(wildcard" "src/ext*)")
 	foreach (module_file ${module_files} ${module_files_cudd})
-		_yosys_abc_extract_makefile(module_sources "SRC \\+=" ${CMAKE_SOURCE_DIR}/abc/${module_file}/module.make)
+		_yosys_abc_extract_makefile(module_sources "SRC \\+=" ${YOSYS_CMAKE_SOURCE_DIR}/abc/${module_file}/module.make)
 		list(APPEND all_sources ${module_sources})
 	endforeach()
 	list(TRANSFORM all_sources PREPEND abc/)
@@ -90,13 +95,13 @@ function(yosys_abc_target arg_LIBNAME arg_EXENAME)
 		$<${YOSYS_ENABLE_THREADS}:Threads::Threads>
 		$<${YOSYS_ENABLE_READLINE}:PkgConfig::readline>
 		$<$<BOOL:${WIN32}>:-lshlwapi>
-		$<$<CXX_COMPILER_ID:MSVC>:${CMAKE_SOURCE_DIR}/abc/lib/x64/pthreadVC2.lib>
+		$<$<CXX_COMPILER_ID:MSVC>:${YOSYS_CMAKE_SOURCE_DIR}/abc/lib/x64/pthreadVC2.lib>
 	)
 	set_target_properties(${arg_LIBNAME} PROPERTIES
 		YOSYS_IS_ABC ON
 	)
 	if(MSVC)
-    	install(FILES "${CMAKE_SOURCE_DIR}/abc/lib/x64/pthreadVC2.dll" DESTINATION bin)
+    	install(FILES "${YOSYS_CMAKE_SOURCE_DIR}/abc/lib/x64/pthreadVC2.dll" DESTINATION bin)
 	endif()
 
 	yosys_cxx_executable(${arg_EXENAME}

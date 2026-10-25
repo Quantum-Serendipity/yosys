@@ -49,7 +49,7 @@ struct SynthPass : public ScriptPass {
 		log("\n");
 		log("    -hieropt\n");
 		log("        enable hierarchical optimization. this option is useful when `-flatten'\n");
-		log("        is not used, or when selected modules are marked with 'keep_hierarchy'\n.");
+		log("        is not used, or when selected modules are marked with 'keep_hierarchy'\n");
 		log("        to prevent their dissolution.\n");
 		log("\n");
 		log("    -encfile <file>\n");
@@ -78,7 +78,7 @@ struct SynthPass : public ScriptPass {
 		log("    -nordff\n");
 		log("        passed to 'memory'. prohibits merging of FFs into memory read ports\n");
 		log("\n");
-		log("    -latches <auto|warn|error>\n");
+		log("    -latches <info|warn|error>\n");
 		log("        controls how the inference of a latch is reported.\n");
 		log("\n");
 		log("    -noshare\n");
@@ -88,12 +88,6 @@ struct SynthPass : public ScriptPass {
 		log("        only run the commands between the labels (see below). an empty\n");
 		log("        from label is synonymous to 'begin', and empty to label is\n");
 		log("        synonymous to the end of the command list.\n");
-		log("\n");
-		log("    -abc9\n");
-		log("        use new ABC9 flow (EXPERIMENTAL)\n");
-		log("\n");
-		log("    -flowmap\n");
-		log("        use FlowMap LUT techmapping instead of ABC\n");
 		log("\n");
 		log("    -no-rw-check\n");
 		log("        marks all recognized read ports as \"return don't-care value on\n");
@@ -115,7 +109,7 @@ struct SynthPass : public ScriptPass {
 	}
 
 	string top_module, fsm_opts, memory_opts, abc, latches_opt;
-	bool autotop, flatten, noalumacc, nofsm, noabc, noshare, flowmap, booth, arith_tree, hieropt, relative_share;
+	bool autotop, flatten, noalumacc, nofsm, noabc, noshare, booth, arith_tree, hieropt, relative_share;
 	int lut;
 	std::vector<std::string> techmap_maps;
 
@@ -133,7 +127,6 @@ struct SynthPass : public ScriptPass {
 		nofsm = false;
 		noabc = false;
 		noshare = false;
-		flowmap = false;
 		booth = false;
 		arith_tree = false;
 		hieropt = false;
@@ -178,6 +171,7 @@ struct SynthPass : public ScriptPass {
 			}
 			if (args[argidx] == "-lut" && argidx + 1 < args.size()) {
 				lut = atoi(args[++argidx].c_str());
+				abc = "abc9";
 				continue;
 			}
 			if (args[argidx] == "-nofsm") {
@@ -213,11 +207,7 @@ struct SynthPass : public ScriptPass {
 				continue;
 			}
 			if (args[argidx] == "-abc9") {
-				abc = "abc9";
-				continue;
-			}
-			if (args[argidx] == "-flowmap") {
-				flowmap = true;
+				// Removed: ABC9 is the default if -lut.
 				continue;
 			}
 			if (args[argidx] == "-no-rw-check") {
@@ -243,11 +233,6 @@ struct SynthPass : public ScriptPass {
 
 		if (!design->full_selection())
 			log_cmd_error("This command only operates on fully selected designs!\n");
-
-		if (abc == "abc9" && !lut)
-			log_cmd_error("ABC9 flow only supported for FPGA synthesis (using '-lut' option)\n");
-		if (flowmap && !lut)
-			log_cmd_error("FlowMap is only supported for FPGA synthesis (using '-lut' option)\n");
 
 		log_header(design, "Executing SYNTH pass.\n");
 		log_push();
@@ -290,8 +275,8 @@ struct SynthPass : public ScriptPass {
 				run("flatten", "  (if -flatten)");
 			}
 			run("opt_expr");
-			run("opt_clean");
 			run("check");
+			run("opt_clean");
 			run("opt -nodffe -nosdff");
 			if (!nofsm || help_mode)
 				run("fsm" + fsm_opts, "      (unless -nofsm)");
@@ -334,16 +319,13 @@ struct SynthPass : public ScriptPass {
 			if (help_mode) {
 				run(techmap_cmd + " -map +/gate2lut.v", "(if -noabc and -lut)");
 				run("clean; opt_lut", "           (if -noabc and -lut)");
-				run("flowmap -maxlut K", "        (if -flowmap and -lut)");
 			} else if (noabc && lut) {
 				run(stringf("%s -map +/gate2lut.v -D LUT_WIDTH=%d", techmap_cmd, lut));
 				run("clean; opt_lut");
-			} else if (flowmap) {
-				run(stringf("flowmap -maxlut %d", lut));
 			}
 			run("opt -fast" + hieropt_flag);
 
-			if ((!noabc && !flowmap) || help_mode) {
+			if (!noabc || help_mode) {
 #ifdef YOSYS_ENABLE_ABC
 				if (help_mode) {
 					run(abc, "       (unless -noabc, unless -lut)");

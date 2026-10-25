@@ -48,6 +48,9 @@ yosys_pass(autoname
 yosys_pass(connect
 	connect.cc
 )
+yosys_pass(optbarriers
+	optbarriers.cc
+)
 yosys_pass(scatter
 	scatter.cc
 )
@@ -82,6 +85,9 @@ yosys_pass(copy
 )
 yosys_pass(splice
 	splice.cc
+)
+yosys_pass(shuffle
+	shuffle.cc
 )
 yosys_pass(scc
 	scc.cc
@@ -210,4 +216,9 @@ yosys_pass(sort
 )
 yosys_pass(icell_liberty
 	icell_liberty.cc
+)
+yosys_pass(symfpu
+	symfpu.cc
+	LIBRARIES
+		symfpu
 )

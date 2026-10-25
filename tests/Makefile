@@ -29,7 +29,6 @@ MK_TEST_DIRS += ./arch/nexus
 MK_TEST_DIRS += ./arch/quicklogic/pp3
 MK_TEST_DIRS += ./arch/quicklogic/qlf_k6n10f
 MK_TEST_DIRS += ./arch/xilinx
-MK_TEST_DIRS += ./bind
 MK_TEST_DIRS += ./bugpoint
 MK_TEST_DIRS += ./opt
 MK_TEST_DIRS += ./sat
@@ -69,6 +68,9 @@ MK_TEST_DIRS += ./fmt
 MK_TEST_DIRS += ./lut
 MK_TEST_DIRS += ./cxxrtl
 MK_TEST_DIRS += ./liberty
+MK_TEST_DIRS += ./abc_new
+MK_TEST_DIRS += ./abc_new/openroad
+MK_TEST_DIRS += ./abc_new/librelane
 #ifeq ($(ENABLE_FUNCTIONAL_TESTS),1)
 #MK_TEST_DIRS += ./functional
 #endif
@@ -77,6 +79,7 @@ MK_TEST_DIRS += ./aiger
 MK_TEST_DIRS += ./alumacc
 MK_TEST_DIRS += ./check_mem
 MK_TEST_DIRS += ./write_verilog
+MK_TEST_DIRS += ./symfpu
 
 all: vanilla-test
 
@@ -127,10 +130,11 @@ clean:
 
 .PHONY: coverage
 coverage:
-	@echo "Creating coverage HTML"
+	@echo "Creating coverage HTML & Codecov report"
 	@$(YOSYS) -qp 'help; help -all'
 	@rm -rf $(COVERAGE_HTML)
 	@llvm-profdata merge -sparse $(COVERAGE_DIR)/coverage_*.profraw -o $(COVERAGE_DIR)/yosys.profdata
+	@llvm-cov export $(YOSYS) -instr-profile=$(COVERAGE_DIR)/yosys.profdata -format=lcov --compilation-dir=$(SRC_DIR) --ignore-filename-regex='(^|.*/)libs/.*|/usr/include/.*|$(subst /,\/,$(VERIFIC_DIR))/.*' > $(BUILD_DIR)/coverage.info
 	@llvm-cov show $(YOSYS) -instr-profile=$(COVERAGE_DIR)/yosys.profdata -format=html -output-dir=$(COVERAGE_HTML) --compilation-dir=$(SRC_DIR) --ignore-filename-regex='(^|.*/)libs/.*|/usr/include/.*|$(subst /,\/,$(VERIFIC_DIR))/.*'
 
 .PHONY: clean_coverage

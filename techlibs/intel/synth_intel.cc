@@ -29,6 +29,31 @@ PRIVATE_NAMESPACE_BEGIN
 struct SynthIntelPass : public ScriptPass {
 	SynthIntelPass() : ScriptPass("synth_intel", "synthesis for Intel (Altera) FPGAs.") { experimental(); }
 
+	void on_register() override
+	{
+		target_register.emplace("intel", Target{
+			"Intel (Altera)",
+			{
+				{"max10", {
+					"MAX 10",
+					{"+/intel/max10/cells_sim.v", "+/intel/common/m9k_bb.v", "+/intel/common/altpll_bb.v"}
+				}},
+				{"cycloneiv", {
+					"Cyclone IV",
+					{"+/intel/cycloneiv/cells_sim.v", "+/intel/common/m9k_bb.v", "+/intel/common/altpll_bb.v"}
+				}},
+				{"cycloneive", {
+					"Cyclone IVe",
+					{"+/intel/cycloneive/cells_sim.v", "+/intel/common/m9k_bb.v", "+/intel/common/altpll_bb.v"}
+				}},
+				{"cyclone10lp", {
+					"Cyclone 10LP",
+					{"+/intel/cyclone10lp/cells_sim.v", "+/intel/common/m9k_bb.v", "+/intel/common/altpll_bb.v"}
+				}}
+			}
+		});
+	}
+
 	void help() override
 	{
 		//   |---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|
@@ -79,16 +104,13 @@ struct SynthIntelPass : public ScriptPass {
 		log("    -noflatten\n");
 		log("        do not flatten design before synthesis\n");
 		log("\n");
-		log("    -retime\n");
-		log("        run 'abc' with '-dff -D 1' options\n");
-		log("\n");
 		log("The following commands are executed by this synthesis command:\n");
 		help_script();
 		log("\n");
 	}
 
 	string top_opt, family_opt, vout_file, blif_file;
-	bool retime, flatten, nobram, dff, nodsp, iopads;
+	bool flatten, nobram, dff, nodsp, iopads;
 
 	void clear_flags() override
 	{
@@ -96,7 +118,6 @@ struct SynthIntelPass : public ScriptPass {
 		family_opt = "max10";
 		vout_file = "";
 		blif_file = "";
-		retime = false;
 		flatten = true;
 		nobram = false;
 		dff = false;
@@ -157,7 +178,7 @@ struct SynthIntelPass : public ScriptPass {
 				continue;
 			}
 			if (args[argidx] == "-retime") {
-				retime = true;
+				// Removed: ABC9 does not support retiming.
 				continue;
 			}
 			break;
@@ -208,8 +229,8 @@ struct SynthIntelPass : public ScriptPass {
 			run("tribuf -logic");
 			run("deminout");
 			run("opt_expr");
-			run("opt_clean");
 			run("check");
+			run("opt_clean");
 			run("opt -nodffe -nosdff");
 			run("fsm");
 			run("opt");
@@ -259,8 +280,6 @@ struct SynthIntelPass : public ScriptPass {
 			run("opt -full");
 			run("clean -purge");
 			run("setundef -undriven -zero");
-			if (retime || help_mode)
-				run("abc -markgroups -dff -D 1", "(only if -retime)");
 		}
 
 		if (check_label("map_ffs")) {
@@ -278,7 +297,7 @@ struct SynthIntelPass : public ScriptPass {
 
 		if (check_label("map_cells")) {
 			if (iopads || help_mode)
-				run("iopadmap -bits -outpad $__outpad I:O -inpad $__inpad O:I", "(if -iopads)");
+				run("iopadmap -bits -outpad $__outpad I:O -inpad $__inpad O:I A:top", "(if -iopads)");
 			run(stringf("techmap -map +/intel/%s/cells_map.v", family_opt));
 			run("clean -purge");
 		}

@@ -4,10 +4,10 @@ configure_file(yosys_config.h.in yosys_config.h @ONLY)
 set(cellhelp_sources)
 foreach (library simlib simcells)
 	add_custom_command(
-		DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/cellhelp.py ${CMAKE_SOURCE_DIR}/techlibs/common/${library}.v
+		DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/cellhelp.py ${YOSYS_CMAKE_SOURCE_DIR}/techlibs/common/${library}.v
 		OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${library}_help.inc
 		COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cellhelp.py
-			${CMAKE_SOURCE_DIR}/techlibs/common/${library}.v
+			${YOSYS_CMAKE_SOURCE_DIR}/techlibs/common/${library}.v
 			> ${CMAKE_CURRENT_BINARY_DIR}/${library}_help.inc
 		VERBATIM
 	)
@@ -15,8 +15,6 @@ foreach (library simlib simcells)
 endforeach()
 
 yosys_core(kernel
-	binding.cc
-	binding.h
 	bitpattern.h
 	calc.cc
 	cellaigs.cc
@@ -44,6 +42,8 @@ yosys_core(kernel
 	functional.h
 	gzip.cc
 	gzip.h
+	hashcons.h
+	hashcons_impl.h
 	hashlib.h
 	io.cc
 	io.h
@@ -68,6 +68,8 @@ yosys_core(kernel
 	rtlil_bufnorm.cc
 	rtlil.cc
 	rtlil.h
+	rtlil_twine_compat.h
+	rtlil_twine_compat_impl.h
 	satgen.cc
 	satgen.h
 	scopeinfo.cc
@@ -80,6 +82,9 @@ yosys_core(kernel
 	threading.h
 	timinginfo.h
 	topo_scc.h
+	twine.cc
+	twine.h
+	unused_bits.h
 	utils.h
 	version.cc
 	yosys.cc
@@ -114,7 +119,6 @@ yosys_core(kernel
 	DATA_DIR
 		include/kernel
 	DATA_FILES
-		binding.h
 		bitpattern.h
 		cellaigs.h
 		celledges.h
@@ -129,6 +133,8 @@ yosys_core(kernel
 		ffmerge.h
 		fmt.h
 		gzip.h
+		hashcons.h
+		hashcons_impl.h
 		hashlib.h
 		io.h
 		json.h
@@ -139,12 +145,16 @@ yosys_core(kernel
 		qcsat.h
 		register.h
 		rtlil.h
+		rtlil_twine_compat.h
+		rtlil_twine_compat_impl.h
 		satgen.h
 		scopeinfo.h
 		sexpr.h
 		sigtools.h
 		threading.h
 		timinginfo.h
+		twine.h
+		unused_bits.h
 		utils.h
 		yosys.h
 		yosys_common.h
@@ -179,6 +189,7 @@ if (NOT YOSYS_BUILD_PYTHON_ONLY)
 		INCLUDE_DIRS
 			${pybind11_INCLUDE_DIR}
 		LIBRARIES
+			fmt::fmt
 			$<${YOSYS_ENABLE_READLINE}:PkgConfig::readline>
 			$<${YOSYS_ENABLE_EDITLINE}:PkgConfig::editline>
 			$<${YOSYS_ENABLE_TCL}:PkgConfig::tcl>

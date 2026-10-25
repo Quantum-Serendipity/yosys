@@ -22,6 +22,7 @@
 #include "kernel/celltypes.h"
 #include "kernel/rtlil.h"
 #include "kernel/log.h"
+#include "passes/proc/proc_dlatch.h"
 
 USING_YOSYS_NAMESPACE
 PRIVATE_NAMESPACE_BEGIN
@@ -33,6 +34,24 @@ struct SynthNanoXplorePass : public ScriptPass
 	void on_register() override
 	{
 		RTLIL::constpad["synth_nanoxplore.abc9.W"] = "300";
+
+		target_register.emplace("nanoxplore", Target{
+			"NanoXplore",
+			{
+				{"medium", {
+					"NG-Medium",
+					{"+/nanoxplore/cells_sim.v", "+/nanoxplore/cells_sim_m.v", "+/nanoxplore/cells_bb_m.v"}
+				}},
+				{"large", {
+					"NG-Large",
+					{"+/nanoxplore/cells_sim.v", "+/nanoxplore/cells_sim_l.v", "+/nanoxplore/cells_bb_l.v"}
+				}},
+				{"ultra", {
+					"NG-Ultra",
+					{"+/nanoxplore/cells_sim.v", "+/nanoxplore/cells_sim_u.v", "+/nanoxplore/cells_bb_u.v"}
+				}}
+			}
+		});
 	}
 
 	void help() override
@@ -66,9 +85,6 @@ struct SynthNanoXplorePass : public ScriptPass
 		log("    -noflatten\n");
 		log("        do not flatten design before synthesis\n");
 		log("\n");
-		log("    -abc9\n");
-		log("        use new ABC9 flow (EXPERIMENTAL)\n");
-		log("\n");
 		log("    -nocy\n");
 		log("        do not map adders to CY cells\n");
 		log("\n");
@@ -97,11 +113,7 @@ struct SynthNanoXplorePass : public ScriptPass
 		log("        read/write collision\" (same result as setting the no_rw_check\n");
 		log("        attribute on all memories).\n");
 		log("\n");
-		log("    -latches <info|warn|error>\n");
-		log("        select the behaviour for latches that cannot be mapped to a\n");
-		log("        dedicated hardware primitive and are implemented using LUTs\n");
-		log("        instead. 'error' (the default) aborts synthesis, 'warn' only\n");
-		log("        prints a warning, and 'info' permits them with an info-level message.\n");
+		SynthLatchesConfig::help();
 		log("\n");
 		log("\n");
 		log("The following commands are executed by this synthesis command:\n");
@@ -109,8 +121,9 @@ struct SynthNanoXplorePass : public ScriptPass
 		log("\n");
 	}
 
-	string top_opt, json_file, family, latches;
-	bool flatten, abc9, nocy, nodffe, norfram, nobram, noiopad, no_rw_check;
+	string top_opt, json_file, family;
+	SynthLatchesConfig latches;
+	bool flatten, nocy, nodffe, norfram, nobram, noiopad, no_rw_check;
 	std::string postfix;
 	int min_ce_use, min_srst_use;
 
@@ -120,7 +133,6 @@ struct SynthNanoXplorePass : public ScriptPass
 		json_file = "";
 		family = "";
 		flatten = true;
-		abc9 = false;
 		nocy = false;
 		nodffe = false;
 		norfram = false;
@@ -130,7 +142,7 @@ struct SynthNanoXplorePass : public ScriptPass
 		postfix = "";
 		min_ce_use = 8;
 		min_srst_use = 8;
-		latches = "error";
+		latches = SynthLatchesConfig();
 	}
 
 	void execute(std::vector<std::string> args, RTLIL::Design *design) override
@@ -170,7 +182,7 @@ struct SynthNanoXplorePass : public ScriptPass
 				continue;
 			}
 			if (args[argidx] == "-abc9") {
-				abc9 = true;
+				// Removed: ABC9 is the default
 				continue;
 			}
 			if (args[argidx] == "-nocy") {
@@ -209,16 +221,11 @@ struct SynthNanoXplorePass : public ScriptPass
 				no_rw_check = true;
 				continue;
 			}
-			if (args[argidx] == "-latches" && argidx+1 < args.size()) {
-				latches = args[++argidx];
+			if (latches.parse(args, argidx))
 				continue;
-			}
 			break;
 		}
 		extra_args(args, argidx, design);
-
-		if (latches != "info" && latches != "warn" && latches != "error")
-			log_cmd_error("Invalid value '%s' for -latches (expected info, warn or error)\n", latches.c_str());
 
 		if (family.empty()) {
 			//log_warning("NanoXplore family not set, setting it to NG-ULTRA.\n");
@@ -263,7 +270,7 @@ struct SynthNanoXplorePass : public ScriptPass
 
 		if (check_label("coarse"))
 		{
-			run("proc -latches " + (latches == "info" ? std::string("info") : std::string("warn")));
+			run(stringf("proc -latches %s", latches.str()));
 			if (flatten || help_mode) {
 				run("check");
 				run("flatten", "(skip if -noflatten)");
@@ -271,8 +278,8 @@ struct SynthNanoXplorePass : public ScriptPass
 			run("tribuf -logic");
 			run("deminout");
 			run("opt_expr");
-			run("opt_clean");
 			run("check");
+			run("opt_clean");
 			run("opt -nodffe -nosdff");
 			run("fsm");
 			run("opt");
@@ -339,7 +346,7 @@ struct SynthNanoXplorePass : public ScriptPass
 			dfflegalize_args += stringf(" -cell $_DLATCH_?_ x -mince %d -minsrst %d", min_ce_use, min_srst_use);
 			run("dfflegalize" + dfflegalize_args,"($_*DFFE_* only if not -nodffe)");
 			run("opt_merge");
-			if (latches == "error" || help_mode)
+			if (latches.policy == LatchPolicy::Error || help_mode)
 				run("check -latchonly -assert", "(only if -latches error, the default)");
 			run("techmap -map +/nanoxplore/latches_map.v");
 			run("techmap -map +/nanoxplore/cells_map.v");
@@ -349,19 +356,13 @@ struct SynthNanoXplorePass : public ScriptPass
 
 		if (check_label("map_luts"))
 		{
-			if (abc9) {
-				std::string abc9_opts = " -maxlut 4";
-				std::string k = "synth_nanoxplore.abc9.W";
-				if (active_design && active_design->scratchpad.count(k))
-					abc9_opts += stringf(" -W %s", active_design->scratchpad_get_string(k));
-				else
-					abc9_opts += stringf(" -W %s", RTLIL::constpad.at(k));
-				run("abc9" + abc9_opts);
-			} else {
-				std::string abc_args = " -dress";
-				abc_args += " -lut 4";
-				run("abc" + abc_args);
-			}
+			std::string abc9_opts = " -lut 4";
+			std::string k = "synth_nanoxplore.abc9.W";
+			if (active_design && active_design->scratchpad.count(k))
+				abc9_opts += stringf(" -W %s", active_design->scratchpad_get_string(k));
+			else
+				abc9_opts += stringf(" -W %s", RTLIL::constpad.at(k));
+			run("abc9" + abc9_opts);
 			run("techmap -map +/nanoxplore/cells_map.v t:$lut");
 			run("opt -fast");
 			run("clean");

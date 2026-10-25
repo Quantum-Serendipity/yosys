@@ -22,6 +22,7 @@ yosys_pass(synth_fabulous
 		read_verilog
 		share
 		stat
+		synth
 		techmap
 		tribuf
 		wreduce
@@ -30,4 +31,5 @@ yosys_pass(synth_fabulous
 	DATA_DIR
 		fabulous
 	DATA_FILES
+		cells_bb.v
 )

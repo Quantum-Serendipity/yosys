@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <limits>
 #include "kernel/rtlil.h"
 
 YOSYS_NAMESPACE_BEGIN
@@ -18,10 +19,10 @@ namespace RTLIL {
 	class KernelRtlilTest : public testing::Test {
 	protected:
 		KernelRtlilTest() {
-			if (log_files.empty()) log_files.emplace_back(stdout);
+			if (logger().empty()) logger().add_sink<ConsoleLogSink>();
 		}
 		virtual void SetUp() override {
-			IdString::ensure_prepopulated();
+			StaticTwines::init();
 		}
 	};
 
@@ -33,6 +34,39 @@ namespace RTLIL {
 		Const c3(c2);
 		EXPECT_TRUE(c2 == c3);
 		EXPECT_FALSE(c2 < c3);
+	}
+
+	TEST_F(KernelRtlilTest, ConstConvertibleToInt) {
+		// A Const whose minimal unsigned size is exactly 32 bits (bit 31 set)
+		// but whose full width is larger must not be reported as convertible
+		// to a (signed) int when treated as unsigned
+		{
+			// 33 bits: bits 0..31 = 1, bit 32 = 0 => value 0xffffffff
+			std::vector<State> v(33, S1);
+			v[32] = S0;
+			Const c(v);
+			EXPECT_FALSE(c.convertible_to_int(false));
+			EXPECT_EQ(c.as_int_saturating(false), std::numeric_limits<int>::max());
+			EXPECT_FALSE(c.convertible_to_int(true));
+			EXPECT_EQ(c.as_int_saturating(true), std::numeric_limits<int>::max());
+		}
+
+		{
+			// 32-bit unsigned 0x7fffffff fits in a signed int
+			std::vector<State> v(32, S1);
+			v[31] = S0;
+			Const c(v);
+			EXPECT_TRUE(c.convertible_to_int(false));
+			EXPECT_EQ(c.as_int(false), 0x7fffffff);
+		}
+
+		{
+			// 32-bit unsigned 0xffffffff does not fit in a signed int
+			std::vector<State> v(32, S1);
+			Const c(v);
+			EXPECT_FALSE(c.convertible_to_int(false));
+			EXPECT_EQ(c.as_int_saturating(false), std::numeric_limits<int>::max());
+		}
 	}
 
 	TEST_F(KernelRtlilTest, ConstStr) {
@@ -284,6 +318,29 @@ namespace RTLIL {
 		EXPECT_EQ(c, Const(0xe, 4));
 	}
 
+	TEST_F(KernelRtlilTest, ConstResizeWidthLimit) {
+		Const c;
+		EXPECT_DEATH(c.resize(RTLIL::WIDTH_LIMIT, Sx), "");
+		EXPECT_NO_FATAL_FAILURE(c.resize(RTLIL::WIDTH_LIMIT - 1, Sx));
+	}
+
+	TEST_F(KernelRtlilTest, ConstFromLongLongWidthLimit) {
+		EXPECT_DEATH(Const(0, RTLIL::WIDTH_LIMIT), "");
+		EXPECT_NO_FATAL_FAILURE(Const(0, RTLIL::WIDTH_LIMIT - 1));
+	}
+
+	TEST_F(KernelRtlilTest, ConstFromStateWidthLimit) {
+		EXPECT_DEATH(Const(Sx, RTLIL::WIDTH_LIMIT), "");
+		EXPECT_NO_FATAL_FAILURE(Const(Sx, RTLIL::WIDTH_LIMIT - 1));
+	}
+
+	TEST_F(KernelRtlilTest, ModuleAddWireWidthLimit) {
+		std::unique_ptr<Design> design = std::make_unique<Design>();
+		Module *mod = design->addModule("$test_mod");
+		EXPECT_DEATH(mod->addWire("\\test", RTLIL::WIDTH_LIMIT), "");
+		EXPECT_NO_FATAL_FAILURE(mod->addWire("\\test2", RTLIL::WIDTH_LIMIT - 1));
+	}
+
 	TEST_F(KernelRtlilTest, ConstEqualStr) {
 		EXPECT_EQ(Const("abc"), Const("abc"));
 		EXPECT_NE(Const("abc"), Const("def"));
@@ -361,34 +418,21 @@ namespace RTLIL {
 		EXPECT_FALSE(Const().is_onehot(&pos));
 	}
 
-	TEST_F(KernelRtlilTest, OwningIdString) {
-		OwningIdString own("\\figblortle");
-		OwningIdString::collect_garbage();
-		EXPECT_EQ(own.str(), "\\figblortle");
-	}
-
 	TEST_F(KernelRtlilTest, LookupAutoidxId) {
-		IdString id = NEW_ID;
-		IdString id2 = IdString(id.str());
-		EXPECT_EQ(id, id2);
+		TwinePool twines;
+		IdString id = twines.add(NEW_ID);
+		EXPECT_EQ(twines.find(twines.str(id)), id);
 	}
 
 	TEST_F(KernelRtlilTest, NewIdBeginsWith) {
-		IdString id = NEW_ID;
-		EXPECT_TRUE(id.begins_with("$auto"));
-		EXPECT_FALSE(id.begins_with("xyz"));
-		EXPECT_TRUE(id.begins_with("$auto$"));
-		EXPECT_FALSE(id.begins_with("abcdefghijklmn"));
-		EXPECT_TRUE(id.begins_with("$auto$rtlilTest"));
-		EXPECT_FALSE(id.begins_with("$auto$rtlilX"));
-	}
-
-	TEST_F(KernelRtlilTest, NewIdIndexing) {
-		IdString id = NEW_ID;
-		std::string str = id.str();
-		for (int i = 0; i < GetSize(str) + 1; ++i) {
-			EXPECT_EQ(id[i], str.c_str()[i]);
-		}
+		TwinePool twines;
+		std::string id = twines.str(twines.add(NEW_ID));
+		EXPECT_TRUE(id.starts_with("$auto"));
+		EXPECT_FALSE(id.starts_with("xyz"));
+		EXPECT_TRUE(id.starts_with("$auto$"));
+		EXPECT_FALSE(id.starts_with("abcdefghijklmn"));
+		EXPECT_TRUE(id.starts_with("$auto$rtlilTest"));
+		EXPECT_FALSE(id.starts_with("$auto$rtlilX"));
 	}
 
 	class WireRtlVsHdlIndexConversionTest :
@@ -417,8 +461,9 @@ namespace RTLIL {
 	);
 
 	TEST_P(WireRtlVsHdlIndexConversionTest, WireRtlVsHdlIndexConversion) {
-		std::unique_ptr<Module> mod = std::make_unique<Module>();
-		Wire *wire = mod->addWire(ID(test), 10);
+		std::unique_ptr<Design> design = std::make_unique<Design>();
+		Module *mod = design->addModule("$test_mod");
+		Wire *wire = mod->addWire("\\test", 10);
 
 		auto [upto, start_offset, width] = GetParam();
 

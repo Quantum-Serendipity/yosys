@@ -178,7 +178,7 @@ struct Abc9Pass : public ScriptPass
 	std::stringstream exe_cmd;
 	bool dff_mode, cleanup;
 	bool lut_mode;
-	int maxlut;
+	int maxlut, xaiger;
 	std::string box_file;
 
 	void clear_flags() override
@@ -189,6 +189,7 @@ struct Abc9Pass : public ScriptPass
 		cleanup = true;
 		lut_mode = false;
 		maxlut = 0;
+		xaiger = 2;
 		box_file = "";
 	}
 
@@ -200,6 +201,7 @@ struct Abc9Pass : public ScriptPass
 		// get arguments from scratchpad first, then override by command arguments
 		dff_mode = design->scratchpad_get_bool("abc9.dff", dff_mode);
 		cleanup = !design->scratchpad_get_bool("abc9.nocleanup", !cleanup);
+		xaiger = design->scratchpad_get_int("abc9.xaiger", 2);
 
 		if (design->scratchpad_get_bool("abc9.debug")) {
 			cleanup = false;
@@ -252,6 +254,10 @@ struct Abc9Pass : public ScriptPass
 
 		if (maxlut && lut_mode)
 			log_cmd_error("abc9 '-maxlut' option only applicable without '-lut' nor '-luts'.\n");
+
+		// write_xaiger2 doesn't yet support `-dff`.
+		if (dff_mode)
+			xaiger = 1;
 
 		log_assert(design);
 		if (design->selected_modules().empty()) {
@@ -319,7 +325,7 @@ struct Abc9Pass : public ScriptPass
 					else {
 						// Rename all submod-s to _TECHMAP_REPLACE_ to inherit name + attrs
 						for (auto module : active_design->selected_modules()) {
-							active_design->selected_active_module = module->name.str();
+							active_design->selected_active_module = module->name;
 							if (module->cell(stringf("%s_$abc9_flop", module->name)))
 								run(stringf("rename %s_$abc9_flop _TECHMAP_REPLACE_", module->name));
 						}
@@ -361,8 +367,9 @@ struct Abc9Pass : public ScriptPass
 				if (help_mode) run("select =*");
 				else active_design->push_complete_selection();
 				run("techmap -wb -map %$abc9 -map +/techmap.v");
+				if (xaiger == 1)
+					run("aigmap");
 				run("opt -purge");
-				run("aigmap");
 				run("design -stash $abc9_holes");
 				run("design -load $abc9");
 				run("design -delete $abc9");
@@ -377,8 +384,8 @@ struct Abc9Pass : public ScriptPass
 				run("    abc9_ops -write_box <abc-temp-dir>/input.box", "(skip if '-box')");
 				run("    write_xaiger -map <abc-temp-dir>/input.sym [-dff] <abc-temp-dir>/input.xaig");
 				run("    abc9_exe [options] -cwd <abc-temp-dir> -lut [<abc-temp-dir>/input.lut] -box [<abc-temp-dir>/input.box]");
-				run("    read_aiger -xaiger -wideports -module_name <module-name>$abc9 -map <abc-temp-dir>/input.sym <abc-temp-dir>/output.aig");
-				run("    abc_ops_reintegrate [-dff]");
+				run("    read_aiger -xaiger -module_name <module-name>$abc9 <abc-temp-dir>/output.aig");
+				run("    abc_ops_reintegrate -map <abc-temp-dir>/input.sym [-dff]");
 			}
 			else {
 				auto selected_modules = active_design->selected_modules();
@@ -392,6 +399,8 @@ struct Abc9Pass : public ScriptPass
 
 					log_push();
 					active_design->select(mod);
+
+					GarbageCollectionGuard gc_guard(false);
 
 					// this check does nothing because the above line adds the whole module to the selection
 					if (!active_design->selected_whole_module(mod))
@@ -409,7 +418,10 @@ struct Abc9Pass : public ScriptPass
 						run_nocheck(stringf("abc9_ops -write_lut %s/input.lut", tempdir_name));
 					if (box_file.empty())
 						run_nocheck(stringf("abc9_ops -write_box %s/input.box", tempdir_name));
-					run_nocheck(stringf("write_xaiger -map %s/input.sym %s %s/input.xaig", tempdir_name, dff_mode ? "-dff" : "", tempdir_name));
+					if (xaiger == 1)
+						run_nocheck(stringf("write_xaiger -map %s/input.sym %s %s/input.xaig", tempdir_name, dff_mode ? "-dff" : "", tempdir_name));
+					else
+						run_nocheck(stringf("write_xaiger2 -mapping_prep -map2 %s/input.sym %s/input.xaig", tempdir_name, tempdir_name));
 
 					int num_outputs = active_design->scratchpad_get_int("write_xaiger.num_outputs");
 
@@ -429,8 +441,8 @@ struct Abc9Pass : public ScriptPass
 						else
 							abc9_exe_cmd += stringf(" -box %s", box_file);
 						run_nocheck(abc9_exe_cmd);
-						run_nocheck(stringf("read_aiger -xaiger -wideports -module_name %s$abc9 -map %s/input.sym %s/output.aig", mod, tempdir_name, tempdir_name));
-						run_nocheck(stringf("abc_ops_reintegrate %s", dff_mode ? "-dff" : ""));
+						run_nocheck(stringf("read_aiger -xaiger -module_name %s$abc9 %s/output.aig", mod, tempdir_name));
+						run_nocheck(stringf("abc_ops_reintegrate -map %s/input.sym %s", tempdir_name, dff_mode ? "-dff" : ""));
 					}
 					else
 						log("Don't call ABC as there is nothing to map.\n");

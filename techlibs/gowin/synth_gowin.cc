@@ -29,6 +29,27 @@ struct SynthGowinPass : public ScriptPass
 {
 	SynthGowinPass() : ScriptPass("synth_gowin", "synthesis for Gowin FPGAs") { }
 
+	void on_register() override
+	{
+		target_register.emplace("gowin", Target{
+			"Gowin",
+			{
+				{"gw1n", {
+					"GW1N",
+					{"+/gowin/cells_sim.v", "+/gowin/cells_xtra_gw1n.v"}
+				}},
+				{"gw2a", {
+					"GW2A",
+					{"+/gowin/cells_sim.v", "+/gowin/cells_xtra_gw2a.v"}
+				}},
+				{"gw5a", {
+					"GW5A",
+					{"+/gowin/cells_sim.v", "+/gowin/cells_xtra_gw5a.v"}
+				}}
+			}
+		});
+	}
+
 	struct DSPRule {
 		int a_maxwidth;
 		int b_maxwidth;
@@ -84,9 +105,6 @@ struct SynthGowinPass : public ScriptPass
 		log("    -noflatten\n");
 		log("        do not flatten design before synthesis\n");
 		log("\n");
-		log("    -retime\n");
-		log("        run 'abc' with '-dff -D 1' options\n");
-		log("\n");
 		log("    -nowidelut\n");
 		log("        do not use muxes to implement LUTs larger than LUT4s\n");
 		log("\n");
@@ -95,9 +113,6 @@ struct SynthGowinPass : public ScriptPass
 		log("\n");
 		log("    -noalu\n");
 		log("        do not use ALU cells\n");
-		log("\n");
-		log("    -noabc9\n");
-		log("        disable use of new ABC9 flow\n");
 		log("\n");
 		log("    -no-rw-check\n");
 		log("        marks all recognized read ports as \"return don't-care value on\n");
@@ -121,7 +136,7 @@ struct SynthGowinPass : public ScriptPass
 	}
 
 	string top_opt, vout_file, json_file, family;
-	bool retime, nobram, nolutram, flatten, nodffe, strict_gw5a_dffs, nowidelut, abc9, noiopads, noalu, no_rw_check, setundef, nodsp;
+	bool nobram, nolutram, flatten, nodffe, strict_gw5a_dffs, nowidelut, noiopads, noalu, no_rw_check, setundef, nodsp;
 
 	void clear_flags() override
 	{
@@ -129,14 +144,12 @@ struct SynthGowinPass : public ScriptPass
 		top_opt = "-auto-top";
 		vout_file = "";
 		json_file = "";
-		retime = false;
 		flatten = true;
 		nobram = false;
 		nodffe = false;
 		strict_gw5a_dffs = false;
 		nolutram = false;
 		nowidelut = false;
-		abc9 = true;
 		noiopads = false;
 		noalu = false;
 		no_rw_check = false;
@@ -177,7 +190,7 @@ struct SynthGowinPass : public ScriptPass
 				continue;
 			}
 			if (args[argidx] == "-retime") {
-				retime = true;
+				// Removed: ABC9 does not support retiming.
 				continue;
 			}
 			if (args[argidx] == "-nobram") {
@@ -209,11 +222,11 @@ struct SynthGowinPass : public ScriptPass
 				continue;
 			}
 			if (args[argidx] == "-abc9") {
-				// removed, ABC9 is on by default.
+				// Removed: ABC9 is on by default.
 				continue;
 			}
 			if (args[argidx] == "-noabc9") {
-				abc9 = false;
+				// Removed: ABC9 can't be disabled.
 				continue;
 			}
 			if (args[argidx] == "-noiopads") {
@@ -272,8 +285,8 @@ struct SynthGowinPass : public ScriptPass
 			run("tribuf -logic");
 			run("deminout");
 			run("opt_expr");
-			run("opt_clean");
 			run("check");
+			run("opt_clean");
 			run("opt -nodffe -nosdff");
 			run("fsm");
 			run("opt");
@@ -330,11 +343,9 @@ struct SynthGowinPass : public ScriptPass
 				run("techmap -map +/techmap.v -map +/gowin/arith_map.v");
 			}
 			run("opt -fast");
-			if (retime || help_mode)
-				run("abc -dff -D 1", "(only if -retime)");
 			if (!noiopads || help_mode)
 				run("iopadmap -bits -inpad IBUF O:I -outpad OBUF I:O "
-					"-toutpad TBUF ~OEN:I:O -tinoutpad IOBUF ~OEN:O:I:IO", "(unless -noiopads)");
+					"-toutpad TBUF ~OEN:I:O -tinoutpad IOBUF ~OEN:O:I:IO A:top", "(unless -noiopads)");
 		}
 
 		if (check_label("map_ffs"))
@@ -361,16 +372,11 @@ struct SynthGowinPass : public ScriptPass
 		if (check_label("map_luts"))
 		{
 			run("sort");
-			if (nowidelut && abc9) {
-				run("read_verilog -icells -lib -specify +/abc9_model.v");
+			run("read_verilog -icells -lib -specify +/abc9_model.v");
+			if (nowidelut) {
 				run("abc9 -maxlut 4 -W 500");
-			} else if (nowidelut && !abc9) {
-				run("abc -lut 4");
-			} else if (!nowidelut && abc9) {
-				run("read_verilog -icells -lib -specify +/abc9_model.v");
+			} else if (!nowidelut) {
 				run("abc9 -maxlut 8 -W 500");
-			} else if (!nowidelut && !abc9) {
-				run("abc -lut 4:8");
 			}
 			run("clean");
 		}

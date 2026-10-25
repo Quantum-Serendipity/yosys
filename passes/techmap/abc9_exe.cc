@@ -190,7 +190,10 @@ void abc9_module(RTLIL::Design *design, std::string script_file, std::string exe
 		if (!merged_scl.empty()) {
 			abc9_script += stringf("read_scl \"%s\" ; ", merged_scl.c_str());
 		} else if(!liberty_files.empty()) {
-			log_warning("ABC: Merged scl conversion failed, using liberty format\n");
+			if (!scl_cache_enabled)
+				log("ABC: SCL cache disabled, using liberty format\n");
+			else
+				log_warning("ABC: Merged scl conversion failed, using liberty format\n");
 			bool first_lib = true;
 			for (std::string liberty_file : liberty_files) {
 				abc9_script += stringf("read_lib %s %s -w \"%s\" ; ", dont_use_args, first_lib ? "" : "-m", liberty_file);
@@ -293,7 +296,7 @@ void abc9_module(RTLIL::Design *design, std::string script_file, std::string exe
 	string temp_stdouterr_name = stringf("%s/stdouterr.txt", tempdir_name);
 	FILE *temp_stdouterr_w = fopen(temp_stdouterr_name.c_str(), "w");
 	if (temp_stdouterr_w == NULL)
-		log_error("ABC: cannot open a temporary file for output redirection");
+		log_error("ABC: cannot open a temporary file for output redirection\n");
 	fflush(stdout);
 	fflush(stderr);
 	FILE *old_stdout = fopen(temp_stdouterr_name.c_str(), "r"); // need any fd for renumbering

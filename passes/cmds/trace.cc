@@ -38,7 +38,7 @@ struct TraceMonitor : public RTLIL::Monitor
 
 	void notify_connect(RTLIL::Cell *cell, RTLIL::IdString port, const RTLIL::SigSpec &old_sig, const RTLIL::SigSpec &sig) override
 	{
-		log("#TRACE# Cell connect: %s.%s.%s = %s (was: %s)\n", cell->module, cell, port.unescape(), log_signal(sig), log_signal(old_sig));
+		log("#TRACE# Cell connect: %s.%s.%s = %s (was: %s)\n", cell->module, cell, PooledName(cell->module, port).unescape(), log_signal(sig), log_signal(old_sig));
 	}
 
 	void notify_connect(RTLIL::Module *module, const RTLIL::SigSig &sigsig) override
@@ -144,27 +144,19 @@ struct DebugPass : public Pass {
 			log_cmd_error("Cannot specify both -on and -off\n");
 
 		if (mode_on) {
-			log_force_debug++;
+			logger().force_debug_on();
 			return;
 		}
 
 		if (mode_off) {
-			if (log_force_debug > 0)
-				log_force_debug--;
+			logger().force_debug_off();
 			return;
 		}
 
-		log_force_debug++;
+		auto force_debug = logger().force_debug_scope(true);
 
-		try {
-			std::vector<std::string> new_args(args.begin() + argidx, args.end());
-			Pass::call(design, new_args);
-		} catch (...) {
-			log_force_debug--;
-			throw;
-		}
-
-		log_force_debug--;
+		std::vector<std::string> new_args(args.begin() + argidx, args.end());
+		Pass::call(design, new_args);
 	}
 } DebugPass;
 
