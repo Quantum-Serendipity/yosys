@@ -2009,6 +2009,71 @@ struct Aiger2Backend : Backend {
 	}
 } Aiger2Backend;
 
+struct OutputOrigin {
+	IdString cell;
+	IdString port;
+	int offset;
+	IdString wire;
+	int wire_offset;
+};
+
+std::vector<OutputOrigin> record_output_origins(Module *top)
+{
+	std::vector<OutputOrigin> origins;
+	for (auto cell : top->cells()) {
+		Module *def = top->design->module(cell->type);
+		if (def && def->has_attribute(ID::abc9_box_id))
+			continue;
+		for (auto &conn : cell->connections()) {
+			if (!cell->output(conn.first) || cell->input(conn.first))
+				continue;
+			for (int i = 0; i < GetSize(conn.second); i++) {
+				SigBit bit = conn.second[i];
+				if (bit.wire && bit.wire->name.isPublic() && !bit.wire->port_input && !bit.wire->port_output)
+					origins.push_back(OutputOrigin{cell->name, conn.first, i, bit.wire->name, bit.offset});
+			}
+		}
+	}
+	return origins;
+}
+
+void restore_output_origins(Module *top, const std::vector<OutputOrigin> &origins)
+{
+	pool<SigBit> driven;
+	for (auto cell : top->cells())
+		for (auto &conn : cell->connections())
+			if (cell->output(conn.first))
+				for (auto bit : conn.second)
+					if (bit.wire)
+						driven.insert(bit);
+	for (auto &[a, b] : top->connections())
+		for (auto bit : a)
+			if (bit.wire)
+				driven.insert(bit);
+
+	int restored = 0;
+	for (auto &origin : origins) {
+		Cell *cell = top->cell(origin.cell);
+		Wire *wire = top->wire(origin.wire);
+		if (!cell || !wire || !cell->hasPort(origin.port) || origin.wire_offset >= GetSize(wire))
+			continue;
+		SigSpec sig = cell->getPort(origin.port);
+		if (origin.offset >= GetSize(sig))
+			continue;
+		SigBit current = sig[origin.offset];
+		SigBit original(wire, origin.wire_offset);
+		if (current == original || !current.wire || current.wire->name.isPublic() || driven.count(original))
+			continue;
+		sig[origin.offset] = original;
+		cell->setPort(origin.port, sig);
+		top->connect(current, original);
+		driven.insert(original);
+		restored++;
+	}
+	if (restored)
+		log("Restored %d cell output bit(s) to the wire they drove before buffer normalization.\n", restored);
+}
+
 struct XAiger2Backend : Backend {
 	XAiger2Backend() : Backend("xaiger2", "write module to XAIGER file") { }
 
@@ -2075,6 +2140,10 @@ struct XAiger2Backend : Backend {
 				log_cmd_error("Failed to open '%s' for writing\n", map_filename);
 		}
 
+		std::vector<OutputOrigin> origins;
+		if (writer.mapping_prep)
+			origins = record_output_origins(top);
+
 		design->bufNormalize(true);
 		writer.setup(top);
 		writer.write(f);
@@ -2085,6 +2154,9 @@ struct XAiger2Backend : Backend {
 		// with it)
 		design->bufNormalize(false);
 		remove_input_port_cells(design);
+
+		if (writer.mapping_prep)
+			restore_output_origins(top, origins);
 	}
 } XAiger2Backend;
 

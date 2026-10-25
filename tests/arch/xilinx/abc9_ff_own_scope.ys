@@ -1,0 +1,28 @@
+read_verilog -lib -specify +/xilinx/cells_sim.v
+read_verilog abc9_ff_own_scope.v
+synth_xilinx -flatten -abc9 -arch xc7 -top top
+check -assert
+select -assert-count 1 w:rb_ndiff
+select -assert-count 1 w:u_core.nd
+select -assert-count 1 w:u_core.u_rb.o_ndiff
+select -assert-count 1 w:a_sav
+select -assert-count 1 w:u_core.u_sav.q
+select -assert-count 4 w:u_core.u_rb.o_ndiff %ci:+FDRE[Q] t:FDRE %i
+select -assert-count 8 w:u_core.u_sav.q %ci:+FDRE[Q] t:FDRE %i
+autoname
+select -assert-count 5 t:FDRE c:u_core.u_rb.* %i
+select -assert-count 8 t:FDRE c:u_core.u_sav.* %i
+select -assert-count 13 t:FDRE
+
+design -reset
+read_verilog -lib -specify +/xilinx/cells_sim.v
+read_verilog abc9_ff_own_scope.v
+hierarchy -top top
+proc
+flatten
+equiv_opt -run :prove -map +/xilinx/cells_sim.v synth_xilinx -flatten -abc9 -arch xc7 -top top
+techmap -wb -D EQUIV -autoproc -map +/xilinx/cells_sim.v gold
+expose w:rb_ndiff w:u_core.nd w:u_core.u_rb.o_ndiff w:rb_flag w:u_core.u_rb.o_flag w:a_sav w:u_core.sq w:u_core.u_sav.q
+opt_clean
+miter -equiv -flatten -make_assert -make_outputs gold gate miter
+sat -verify -prove-asserts -seq 2 -set-init-zero -timeout 300 -show-ports miter
